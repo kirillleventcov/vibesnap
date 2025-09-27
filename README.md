@@ -28,8 +28,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 1.  Clone the repository:
 
     ```bash
-    git clone https://github.com/your-username/VibeSnap
-    cd VibeSnap
+    git clone https://github.com/kirillleventcov/vibesnap
+    cd vibesnap
     ```
 
 2.  Build the release binary:
