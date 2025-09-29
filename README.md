@@ -222,7 +222,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     ```
     Your working directory is now back to the latest state of the `main` track.
 
-### Time Travel Workflow 🚀
+### Time Travel Workflow
 
 1.  **Start automatic checkpointing (time-based)**
 

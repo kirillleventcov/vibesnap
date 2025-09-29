@@ -43,6 +43,11 @@ pub fn should_ignore_path(path: &Path, root: &Path, patterns: &[String]) -> bool
 
     let path_str: std::borrow::Cow<'_, str> = relative_path.to_string_lossy();
 
+    // Always ignore .git directory
+    if path_str == ".git" || path_str.starts_with(".git/") {
+        return true;
+    }
+
     for pattern in patterns {
         if matches_pattern(&path_str, pattern) {
             return true;
