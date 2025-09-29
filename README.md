@@ -112,6 +112,29 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   - `--detailed`: Show more detailed information for each checkpoint.
   - `--compact`: Use a more compact layout.
 
+### Time Travel Mode 🚀
+
+- `vibesnap watch [--interval <minutes>] [--on-save] [--stop]`
+  Automatically creates checkpoints at regular intervals or on file save.
+  - `--interval`: Set the interval in minutes for time-based mode (default: from config, or 5 minutes).
+  - `--on-save`: Watch for file saves instead of time-based intervals.
+  - `--stop`: Stop the watch daemon.
+
+- `vibesnap rewind [--duration <duration>] [--to <time>] [--progress]`
+  Rewind to an earlier point in time.
+  - `--duration`: Duration to rewind (e.g., `30m`, `2h`, `1h30m`, `45s`).
+  - `--to`: Rewind to a specific time today (format: `HH:MM` or `HH:MM:SS`).
+  - `--progress`: Show progress bar during restore.
+
+- `vibesnap fastforward [--progress]`
+  Fast-forward to the next checkpoint in the timeline.
+  - `--progress`: Show progress bar during restore.
+
+- `vibesnap timeline [--track <name>] [--detailed]`
+  Show a visual timeline of checkpoints with timestamps.
+  - `--track`: Show only a specific track.
+  - `--detailed`: Display detailed information in a table format.
+
 ### Configuration
 
 - `vibesnap config <subcommand>`
@@ -132,6 +155,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   - `diff`: Interactive diff comparison.
 
 ## Example Workflow
+
+### Basic Workflow
 
 1.  **Initialize a repository**
 
@@ -196,6 +221,78 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     Switched to track main and restored checkpoint E5F6G7H8
     ```
     Your working directory is now back to the latest state of the `main` track.
+
+### Time Travel Workflow 🚀
+
+1.  **Start automatic checkpointing (time-based)**
+
+    ```bash
+    $ vibesnap watch --interval 5
+    Started watching /path/to/project (auto-snap every 5 minutes)
+    Press Ctrl+C to stop watching...
+    ⏱  auto-snap X1Y2Z3W4 created
+    ⏱  auto-snap P5Q6R7S8 created
+    ```
+
+    **Or watch for file saves:**
+
+    ```bash
+    $ vibesnap watch --on-save
+    Started watching /path/to/project (auto-snap on file save)
+    Press Ctrl+C to stop watching...
+    Watching for file changes...
+    💾 auto-snap A9B8C7D6 created
+    💾 auto-snap E5F4G3H2 created
+    ```
+
+2.  **View your timeline**
+
+    ```bash
+    $ vibesnap timeline
+    Timeline for track: main
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ◆ 10:30:00 A1B2C3D4 - Initial implementation
+    ○ 10:35:00 X1Y2Z3W4 - ⏱  Time-based at 10:35:00
+    ◆ 10:37:15 E5F6G7H8 - Refactor main function
+    ○ 10:38:22 A9B8C7D6 - 💾 File save at 10:38:22
+    ○ 10:40:00 P5Q6R7S8 - ⏱  Time-based at 10:40:00
+    ● 10:42:30 M9N0O1P2 - Add error handling
+
+    Legend:
+      ◆ Manual snap  ○ Auto-snap  ● Current position
+    ```
+
+3.  **Rewind to 30 minutes ago**
+
+    ```bash
+    $ vibesnap rewind --duration 30m
+    Rewinding to checkpoint X1Y2Z3W4 ...
+    Workspace restored to X1Y2Z3W4 (15 files)
+    ```
+
+4.  **Or rewind to a specific time**
+
+    ```bash
+    $ vibesnap rewind --to 10:35
+    Rewinding to checkpoint X1Y2Z3W4 ...
+    Workspace restored to X1Y2Z3W4 (15 files)
+    ```
+
+5.  **Fast-forward to move ahead**
+
+    ```bash
+    $ vibesnap fastforward
+    Fast-forwarding to checkpoint E5F6G7H8 ...
+    Workspace restored to E5F6G7H8 (1 file)
+    ```
+
+6.  **Stop watching**
+
+    ```bash
+    $ vibesnap watch --stop
+    Stopped watch process (PID: 12345)
+    ```
 
 ## How It Works
 

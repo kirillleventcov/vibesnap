@@ -101,6 +101,20 @@ fn run() -> Result<()> {
         } => commands::graph::graph_command(detailed, track, compact)?,
         Commands::Config { action } => commands::config::config_command(action)?,
         Commands::Reset { confirm } => commands::reset::reset_command(confirm)?,
+        Commands::Watch {
+            interval,
+            stop,
+            on_save,
+        } => commands::watch::watch_command(interval, stop, on_save)?,
+        Commands::Rewind {
+            duration,
+            to,
+            progress,
+        } => commands::rewind::rewind_command(duration, to, progress)?,
+        Commands::Fastforward { progress } => commands::fastforward::fastforward_command(progress)?,
+        Commands::Timeline { track, detailed } => {
+            commands::timeline::timeline_command(track, detailed)?
+        }
     }
     Ok(())
 }

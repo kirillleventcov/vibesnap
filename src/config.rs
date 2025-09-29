@@ -13,8 +13,16 @@ pub struct Config {
     show_progress: bool,
     #[serde(default = "default_track_name")]
     default_track: String,
+    #[serde(default = "default_watch_interval")]
+    watch_interval_minutes: u64,
+    #[serde(default)]
+    watch_enabled: bool,
     #[serde(flatten)]
     pub extra: HashMap<String, toml::Value>,
+}
+
+fn default_watch_interval() -> u64 {
+    5
 }
 
 fn default_user() -> String {
@@ -36,6 +44,8 @@ impl Default for Config {
             auto_note_format: default_auto_note_format(),
             show_progress: false,
             default_track: default_track_name(),
+            watch_interval_minutes: default_watch_interval(),
+            watch_enabled: false,
             extra: HashMap::new(),
         }
     }
@@ -80,5 +90,13 @@ impl Config {
 
     pub fn should_show_progress(&self, cli_flag: bool) -> bool {
         cli_flag || self.show_progress
+    }
+
+    pub fn watch_interval_minutes(&self) -> u64 {
+        self.watch_interval_minutes
+    }
+
+    pub fn is_watch_enabled(&self) -> bool {
+        self.watch_enabled
     }
 }

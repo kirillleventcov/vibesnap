@@ -22,7 +22,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             track TEXT,
             parent TEXT,
             timestamp INTEGER,
-            note TEXT
+            note TEXT,
+            is_auto INTEGER DEFAULT 0
         );
         ",
     )

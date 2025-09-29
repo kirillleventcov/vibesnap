@@ -1,14 +1,18 @@
 pub mod branch;
 pub mod config;
 pub mod diff;
+pub mod fastforward;
 pub mod graph;
 pub mod init;
 pub mod latest;
 pub mod list;
 pub mod reset;
 pub mod restore;
+pub mod rewind;
 pub mod snap;
 pub mod switch;
+pub mod timeline;
+pub mod watch;
 
 // Helper function to combine --file and --files options
 pub fn get_selective_files(

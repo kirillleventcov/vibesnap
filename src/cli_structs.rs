@@ -116,6 +116,36 @@ pub enum Commands {
         #[clap(long, help = "Skips the confirmation prompt")]
         confirm: bool,
     },
+    /// Automatically create checkpoints at regular intervals or on file save
+    Watch {
+        #[clap(long, help = "Set interval in minutes (default: from config)")]
+        interval: Option<u64>,
+        #[clap(long, help = "Stop the watch daemon")]
+        stop: bool,
+        #[clap(long, help = "Watch for file saves instead of time-based")]
+        on_save: bool,
+    },
+    /// Rewind to an earlier point in time
+    Rewind {
+        #[clap(long, help = "Duration to rewind (e.g., 30m, 2h, 1h30m)")]
+        duration: Option<String>,
+        #[clap(long, help = "Rewind to specific time today (HH:MM or HH:MM:SS)")]
+        to: Option<String>,
+        #[clap(long, help = "Show progress bar for large operations")]
+        progress: bool,
+    },
+    /// Fast-forward to the next checkpoint in the timeline
+    Fastforward {
+        #[clap(long, help = "Show progress bar for large operations")]
+        progress: bool,
+    },
+    /// Show a visual timeline of checkpoints
+    Timeline {
+        #[clap(long, help = "Show only specific track")]
+        track: Option<String>,
+        #[clap(long, help = "Show detailed information")]
+        detailed: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]

@@ -28,6 +28,8 @@ pub enum AppError {
     NotEnoughCheckpointsForDiff,
     #[error("Dialoguer error: {0}")]
     DialoguerError(#[from] dialoguer::Error),
+    #[error("{0}")]
+    Generic(String),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
