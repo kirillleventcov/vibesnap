@@ -95,8 +95,4 @@ impl Config {
     pub fn watch_interval_minutes(&self) -> u64 {
         self.watch_interval_minutes
     }
-
-    pub fn is_watch_enabled(&self) -> bool {
-        self.watch_enabled
-    }
 }

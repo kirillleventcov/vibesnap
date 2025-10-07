@@ -114,7 +114,6 @@ fn watch_on_file_save(root: &PathBuf) -> Result<()> {
 
     // Watch the root directory recursively
     debouncer
-        .watcher()
         .watch(&root, RecursiveMode::Recursive)
         .map_err(|e| {
             crate::error::AppError::Generic(format!("Failed to watch directory: {}", e))
