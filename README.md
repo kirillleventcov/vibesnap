@@ -15,9 +15,13 @@ VibeSnap is a command-line tool designed for a fast, iterative workflow, particu
 
 ## Installation
 
-### Prerequisites
+### From crates.io (Recommended)
 
-- Rust 1.85+ (2024) (install from [https://rustup.rs/](https://rustup.rs/)):
+```bash
+cargo install vibesnap
+```
+
+This requires Rust 1.85+ (install from [https://rustup.rs/](https://rustup.rs/)):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh

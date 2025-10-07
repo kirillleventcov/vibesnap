@@ -2,6 +2,12 @@
 name = "vibesnap"
 version = "1.0.0"
 edition = "2024"
+description = "Snapshot-style version control for AI-first coding"
+readme = "README.md"
+repository = "https://github.com/kirillleventcov/vibesnap"
+license = "MIT"
+keywords = ["version-control", "snapshot", "checkpoint", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "vibesnap"
