@@ -6,7 +6,7 @@ use super::constants::{DB_FILENAME, REPO_DIRNAME};
 
 pub fn db_connect(root: &Path) -> Result<Connection> {
     let db_path = root.join(REPO_DIRNAME).join(DB_FILENAME);
-    Connection::open(db_path).map_err(AppError::DbError)
+    Connection::open(db_path).map_err(AppError::Db)
 }
 
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
@@ -27,5 +27,5 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         );
         ",
     )
-    .map_err(AppError::DbError)
+    .map_err(AppError::Db)
 }

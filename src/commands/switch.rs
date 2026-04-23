@@ -19,7 +19,7 @@ pub fn switch_command(name: String) -> Result<()> {
 
     match query_result {
         Ok(Some(head_id)) => {
-            restore_command(head_id.clone(), false, None)?;
+            restore_command(head_id.clone(), None)?;
             write_head(&root, &name, Some(&head_id))?;
             println!(
                 "{}",

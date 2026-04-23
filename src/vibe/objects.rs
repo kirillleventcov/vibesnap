@@ -33,5 +33,5 @@ pub fn read_content_from_objects(root: &Path, hash: &str) -> Result<Vec<u8>> {
         return Err(AppError::ObjectNotFound(hash.to_string()));
     }
 
-    fs::read(object_path).map_err(AppError::IoError)
+    fs::read(object_path).map_err(AppError::Io)
 }

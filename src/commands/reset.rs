@@ -1,4 +1,4 @@
-use crate::error::{AppError, Result};
+use crate::error::Result;
 use crate::vibe::{constants::REPO_DIRNAME, repo::find_repo_root};
 use colored::*;
 use std::fs;
@@ -9,8 +9,7 @@ pub fn reset_command(confirm: bool) -> Result<()> {
             .with_prompt(
                 "This will irreversibly delete the .vibe directory and all snaps. Are you sure?",
             )
-            .interact()
-            .map_err(|e| AppError::DialoguerError(e))?;
+            .interact()?;
 
         if !confirmation {
             println!("Reset cancelled.");
@@ -28,7 +27,7 @@ pub fn reset_command(confirm: bool) -> Result<()> {
                 println!("No VibeSnap repo found to reset.");
             }
         }
-        Err(AppError::NotInRepo) => {
+        Err(crate::error::AppError::NotInRepo) => {
             println!("No VibeSnap repo found to reset.");
         }
         Err(e) => return Err(e),

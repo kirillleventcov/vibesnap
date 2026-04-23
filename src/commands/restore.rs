@@ -8,14 +8,15 @@ use colored::*;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+
 pub fn restore_command(
     checkpoint_id: String,
-    show_progress: bool,
     selective_files: Option<Vec<PathBuf>>,
 ) -> Result<()> {
     let root = find_repo_root(None)?;
     let manifest = load_snapshot_manifest(&root, &checkpoint_id)?;
     let (current_track_name, _) = read_head(&root)?;
+
     let filtered_manifest = if let Some(ref files) = selective_files.as_ref() {
         let mut filtered = SnapshotManifest {
             files: HashMap::new(),
@@ -44,59 +45,35 @@ pub fn restore_command(
     } else {
         manifest
     };
-    if show_progress {
-        crate::cli::progress::restore_files_from_manifest_with_progress(&root, &filtered_manifest)?;
-    } else {
-        restore_files_from_manifest(&root, &filtered_manifest)?;
-    }
+
+    restore_files_from_manifest(&root, &filtered_manifest)?;
+
     if selective_files.is_none() {
         write_head(&root, &current_track_name, Some(&checkpoint_id))?;
     }
+
     let files_info = if selective_files.is_some() {
         format!(
-            " ({} files: {})",
-            filtered_manifest.files.len(),
-            filtered_manifest
-                .files
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
+            " ({} files)",
+            filtered_manifest.files.len()
         )
     } else {
         format!(" ({} files)", filtered_manifest.files.len())
     };
-    if selective_files.is_some() {
-        println!(
-            "{}",
-            format!(
-                "Selective restore completed{}\nRestored files from checkpoint {} to workspace",
-                files_info,
-                checkpoint_id.green()
-            )
-        );
-    } else {
-        let hint = format!(
-            "\n{}\n  vibesnap branch <new-track-name> {}\n  vibesnap switch <new-track-name>",
-            "Hint: If you want to save new work from this point on a new track, run:".cyan(),
-            checkpoint_id
-        );
-        println!(
-            "{}",
-            format!(
-                "Workspace restored to {}{}\n{}: Workspace files now match '{}'.\nYou are still on track '{}', and HEAD pointer is updated to '{}' for parenting purposes.{}",
-                checkpoint_id.green(),
-                files_info,
-                "Detached mode".yellow(),
-                checkpoint_id,
-                current_track_name,
-                checkpoint_id,
-                hint
-            )
-        );
-    }
+
+    println!(
+        "{}",
+        format!(
+            "Restored{}{} from checkpoint {}",
+            if selective_files.is_some() { " files" } else { "" },
+            files_info,
+            checkpoint_id.green()
+        )
+    );
+
     Ok(())
 }
+
 fn restore_files_from_manifest(root: &std::path::Path, manifest: &SnapshotManifest) -> Result<()> {
     for (file_path, hash) in &manifest.files {
         let dest_path = root.join(file_path);

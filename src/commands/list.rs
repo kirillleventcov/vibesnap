@@ -1,9 +1,9 @@
-use crate::cli::display::{display_checkpoints_table, display_checkpoints_with_tree};
+use crate::cli::display::display_compact_checkpoints;
 use crate::cli::interactive::interactive_list_selection;
 use crate::error::Result;
 use crate::vibe::{
     db::db_connect,
-    repo::find_repo_root,
+    repo::{find_repo_root, read_head},
     snapshot::{SnapshotManifest, load_snapshot_manifest},
 };
 use colored::*;
@@ -11,17 +11,17 @@ use std::path::PathBuf;
 
 pub fn list_checkpoints_command(
     track_filter: Option<String>,
-    show_tree: bool,
     interactive: bool,
     file_filter: Option<PathBuf>,
 ) -> Result<()> {
     let root = find_repo_root(None)?;
     let conn = db_connect(&root)?;
+    let (_, current_checkpoint_id) = read_head(&root)?;
 
     let mut query = "SELECT id, track, parent, timestamp, note FROM checkpoints".to_string();
     let mut params: Vec<String> = Vec::new();
 
-    if let Some(track_name) = track_filter {
+    if let Some(track_name) = track_filter.clone() {
         query.push_str(" WHERE track = ?1");
         params.push(track_name);
     }
@@ -59,10 +59,7 @@ pub fn list_checkpoints_command(
 
     if checkpoints.is_empty() {
         if let Some(ref file_path) = file_filter {
-            println!(
-                "No checkpoints found containing file: {}",
-                file_path.display()
-            );
+            println!("No checkpoints found containing file: {}", file_path.display());
         } else {
             println!("No checkpoints found.");
         }
@@ -78,10 +75,8 @@ pub fn list_checkpoints_command(
 
     if interactive {
         interactive_list_selection(checkpoints)?;
-    } else if show_tree {
-        display_checkpoints_with_tree(&root, checkpoints);
     } else {
-        display_checkpoints_table(checkpoints);
+        display_compact_checkpoints(checkpoints, current_checkpoint_id);
     }
 
     Ok(())

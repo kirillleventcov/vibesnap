@@ -9,11 +9,10 @@ use std::path::PathBuf;
 
 use super::display::display_file_tree;
 
-pub fn interactive_list_selection(
-    checkpoints: Vec<(String, String, Option<String>, i64, Option<String>)>,
-) -> Result<()> {
-    let root = find_repo_root(None)?;
-    let items: Vec<String> = checkpoints
+fn checkpoint_items(
+    checkpoints: &[(String, String, Option<String>, i64, Option<String>)],
+) -> Vec<String> {
+    checkpoints
         .iter()
         .map(|(id, track, _, timestamp, note)| {
             let local_datetime = Local
@@ -28,7 +27,14 @@ pub fn interactive_list_selection(
                 note.as_deref().unwrap_or("No note")
             )
         })
-        .collect();
+        .collect()
+}
+
+pub fn interactive_list_selection(
+    checkpoints: Vec<(String, String, Option<String>, i64, Option<String>)>,
+) -> Result<()> {
+    let root = find_repo_root(None)?;
+    let items = checkpoint_items(&checkpoints);
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Select a checkpoint")
@@ -46,7 +52,7 @@ pub fn interactive_list_selection(
         .interact()?;
 
     match action {
-        0 => restore_command(selected_id.to_string(), true, None)?,
+        0 => restore_command(selected_id.to_string(), None)?,
         1 => {
             if let Ok(manifest) = load_snapshot_manifest(&root, selected_id) {
                 println!("\nCheckpoint: {}", selected_id);
@@ -60,7 +66,6 @@ pub fn interactive_list_selection(
 }
 
 pub fn interactive_restore_command(
-    show_progress: bool,
     selective_files: Option<Vec<PathBuf>>,
 ) -> Result<()> {
     let root = find_repo_root(None)?;
@@ -86,22 +91,7 @@ pub fn interactive_restore_command(
         return Ok(());
     }
 
-    let items: Vec<String> = checkpoints
-        .iter()
-        .map(|(id, track, _, timestamp, note)| {
-            let local_datetime = Local
-                .timestamp_opt(*timestamp, 0)
-                .single()
-                .unwrap_or_default();
-            format!(
-                "{} ({}) - {} - {}",
-                id,
-                track,
-                local_datetime.format("%Y-%m-%d %H:%M:%S"),
-                note.as_deref().unwrap_or("No note")
-            )
-        })
-        .collect();
+    let items = checkpoint_items(&checkpoints);
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Select checkpoint to restore")
@@ -110,32 +100,7 @@ pub fn interactive_restore_command(
         .interact()?;
 
     let (selected_id, _, _, _, _) = &checkpoints[selection];
-    restore_command(selected_id.to_string(), show_progress, selective_files)
-}
-
-pub fn interactive_file_restore_command(checkpoint_id: String, show_progress: bool) -> Result<()> {
-    let root = find_repo_root(None)?;
-    let manifest = load_snapshot_manifest(&root, &checkpoint_id)?;
-
-    if manifest.files.is_empty() {
-        println!("No files found in checkpoint {}", checkpoint_id);
-        return Ok(());
-    }
-
-    let mut file_list: Vec<String> = manifest.files.keys().cloned().collect();
-    file_list.sort();
-
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt(format!(
-            "Select file to restore from checkpoint {}",
-            checkpoint_id
-        ))
-        .default(0)
-        .items(&file_list)
-        .interact()?;
-
-    let selected_file = PathBuf::from(&file_list[selection]);
-    restore_command(checkpoint_id, show_progress, Some(vec![selected_file]))
+    restore_command(selected_id.to_string(), selective_files)
 }
 
 pub fn interactive_switch_command() -> Result<()> {
@@ -161,7 +126,7 @@ pub fn interactive_switch_command() -> Result<()> {
     switch_command(tracks[selection].clone())
 }
 
-pub fn interactive_diff_command(file_path_opt: Option<PathBuf>, side_by_side: bool) -> Result<()> {
+pub fn interactive_diff_command(file_path_opt: Option<PathBuf>) -> Result<()> {
     let root = find_repo_root(None)?;
     let conn = db_connect(&root)?;
 
@@ -184,22 +149,7 @@ pub fn interactive_diff_command(file_path_opt: Option<PathBuf>, side_by_side: bo
         return Err(AppError::NotEnoughCheckpointsForDiff);
     }
 
-    let items: Vec<String> = checkpoints
-        .iter()
-        .map(|(id, track, _, timestamp, note)| {
-            let local_datetime = Local
-                .timestamp_opt(*timestamp, 0)
-                .single()
-                .unwrap_or_default();
-            format!(
-                "{} ({}) - {} - {}",
-                id,
-                track,
-                local_datetime.format("%Y-%m-%d %H:%M:%S"),
-                note.as_deref().unwrap_or("No note")
-            )
-        })
-        .collect();
+    let items = checkpoint_items(&checkpoints);
 
     let selection1 = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Select first checkpoint")
@@ -220,5 +170,5 @@ pub fn interactive_diff_command(file_path_opt: Option<PathBuf>, side_by_side: bo
     let (id1, _, _, _, _) = &checkpoints[selection1];
     let (id2, _, _, _, _) = &checkpoints[selection2];
 
-    diff_command(id1.clone(), id2.clone(), file_path_opt, side_by_side)
+    diff_command(id1.clone(), id2.clone(), file_path_opt)
 }

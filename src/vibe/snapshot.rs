@@ -26,9 +26,9 @@ pub fn save_snapshot_manifest(
 
     let manifest_path: PathBuf = snapshots_dir.join(format!("{}.json", checkpoint_id));
     let json_content: String = serde_json::to_string_pretty(manifest)
-        .map_err(|e| AppError::ManifestSerializationError(e.to_string()))?;
+        .map_err(|e| AppError::Generic(format!("Failed to serialize manifest: {e}")))?;
 
-    fs::write(manifest_path, json_content).map_err(AppError::IoError)
+    fs::write(manifest_path, json_content).map_err(AppError::Io)
 }
 
 // Helper function to load snapshot manifest
@@ -39,12 +39,12 @@ pub fn load_snapshot_manifest(root: &Path, checkpoint_id: &str) -> Result<Snapsh
         .join(format!("{}.json", checkpoint_id));
 
     if !manifest_path.exists() {
-        return Err(AppError::ManifestNotFound(checkpoint_id.to_string()));
+        return Err(AppError::CheckpointNotFound(checkpoint_id.to_string()));
     }
 
     let json_content: String = fs::read_to_string(manifest_path)?;
     serde_json::from_str(&json_content)
-        .map_err(|e| AppError::ManifestDeserializationError(e.to_string()))
+        .map_err(|e| AppError::Generic(format!("Failed to deserialize manifest: {e}")))
 }
 
 // Helper function to build snapshot manifest from paths
@@ -98,7 +98,7 @@ pub fn build_snapshot_manifest(
             eprintln!(
                 "{}",
                 format!(
-                    "Ignored: {} (matches .vibeignore pattern)",
+                    "Ignored: {} (matches ignore pattern)",
                     source_path_canon.display()
                 )
                 .yellow()

@@ -12,7 +12,6 @@ use std::path::PathBuf;
 pub fn snap_command(
     paths: Vec<PathBuf>,
     note: String,
-    show_progress: bool,
     selective_files: Option<Vec<PathBuf>>,
 ) -> Result<()> {
     let config = Config::load();
@@ -42,15 +41,7 @@ pub fn snap_command(
         }
     };
 
-    // Use config to determine if progress should be shown
-    let should_show_progress = config.should_show_progress(show_progress);
-
-    // Build manifest with progress bar based on config
-    let manifest = if should_show_progress {
-        crate::cli::progress::build_snapshot_manifest_with_progress(&root, &paths_to_process_input)?
-    } else {
-        build_snapshot_manifest(&root, &paths_to_process_input)?
-    };
+    let manifest = build_snapshot_manifest(&root, &paths_to_process_input)?;
 
     // Save the manifest
     save_snapshot_manifest(&root, &checkpoint_id, &manifest)?;
@@ -90,7 +81,7 @@ pub fn snap_command(
 
     println!(
         "{}",
-        format!("✓ snap {}{} - {}", checkpoint_id, files_info, final_note).green()
+        format!("snap {}{} - {}", checkpoint_id, files_info, final_note).green()
     );
 
     Ok(())

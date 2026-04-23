@@ -1,4 +1,4 @@
-use crate::cli::display::{show_side_by_side_diff, show_unified_diff};
+use crate::cli::display::show_unified_diff;
 use crate::error::Result;
 use crate::vibe::{
     objects::read_content_from_objects, repo::find_repo_root, snapshot::load_snapshot_manifest,
@@ -11,7 +11,6 @@ pub fn diff_command(
     id1: String,
     id2: String,
     file_path_opt: Option<PathBuf>,
-    side_by_side: bool,
 ) -> Result<()> {
     let root = find_repo_root(None)?;
     let manifest1 = load_snapshot_manifest(&root, &id1)?;
@@ -37,11 +36,7 @@ pub fn diff_command(
             return Ok(());
         }
 
-        if side_by_side {
-            show_side_by_side_diff(&text1, &text2, &path_str);
-        } else {
-            show_unified_diff(&text1, &text2, &path_str);
-        }
+        show_unified_diff(&text1, &text2, &path_str);
     } else {
         let files1: HashSet<_> = manifest1.files.keys().collect();
         let files2: HashSet<_> = manifest2.files.keys().collect();
@@ -66,11 +61,7 @@ pub fn diff_command(
                 .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
                 .unwrap_or_default();
 
-            if side_by_side {
-                show_side_by_side_diff(&text1, &text2, file_path);
-            } else {
-                show_unified_diff(&text1, &text2, file_path);
-            }
+            show_unified_diff(&text1, &text2, file_path);
         }
     }
 

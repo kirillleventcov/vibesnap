@@ -23,9 +23,6 @@ pub fn find_repo_root(start: Option<PathBuf>) -> Result<PathBuf> {
 pub fn read_head(root: &Path) -> Result<(String, Option<String>)> {
     let head_file: PathBuf = root.join(REPO_DIRNAME).join(HEAD_FILENAME);
     if !head_file.exists() {
-        // If HEAD doesn't exist, initialize with default track and no checkpoint ID
-        // This situation might occur if init was incomplete or HEAD was deleted.
-        // We'll also write this default state to HEAD to ensure consistency.
         write_head(root, DEFAULT_TRACK, None)?;
         return Ok((DEFAULT_TRACK.to_string(), None));
     }
@@ -34,7 +31,7 @@ pub fn read_head(root: &Path) -> Result<(String, Option<String>)> {
     match parts.as_slice() {
         [track] => Ok((track.to_string(), None)),
         [track, checkpoint_id] => Ok((track.to_string(), Some(checkpoint_id.to_string()))),
-        _ => Err(AppError::InvalidHead),
+        _ => Err(AppError::Generic("Invalid HEAD file format".into())),
     }
 }
 
@@ -44,5 +41,5 @@ pub fn write_head(root: &Path, track: &str, checkpoint_id: Option<&str>) -> Resu
         Some(id) => format!("{} {}\n", track, id),
         None => format!("{}\n", track),
     };
-    fs::write(head_file, content).map_err(AppError::IoError)
+    fs::write(head_file, content).map_err(AppError::Io)
 }

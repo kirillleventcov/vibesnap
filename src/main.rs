@@ -9,7 +9,7 @@ use clap::Parser;
 use colored::*;
 use error::Result;
 
-use cli_structs::{Cli, Commands, SelectCommands};
+use cli_structs::{Cli, Commands, ConfigCommands};
 
 fn main() {
     if let Err(e) = run() {
@@ -23,44 +23,25 @@ fn run() -> Result<()> {
 
     match cli.command {
         Commands::Init { path } => commands::init::init_command(&path)?,
-        Commands::Snap {
-            paths,
-            note,
-            progress,
-            files,
-            file,
-        } => {
-            let selective_files = commands::get_selective_files(files, file);
-            commands::snap::snap_command(paths, note, progress, selective_files)?
+        Commands::Snap { paths, note, file } => {
+            let selective_files = if file.is_empty() { None } else { Some(file) };
+            commands::snap::snap_command(paths, note, selective_files)?
         }
         Commands::List {
             track,
-            tree,
             interactive,
             file,
-        } => commands::list::list_checkpoints_command(track, tree, interactive, file)?,
+        } => commands::list::list_checkpoints_command(track, interactive, file)?,
         Commands::Restore {
             checkpoint_id,
             interactive,
-            progress,
-            files,
             file,
-            interactive_files,
         } => {
-            let selective_files = commands::get_selective_files(files, file);
+            let selective_files = if file.is_empty() { None } else { Some(file) };
             if interactive || checkpoint_id.is_none() {
-                cli::interactive::interactive_restore_command(progress, selective_files)?
-            } else if interactive_files {
-                cli::interactive::interactive_file_restore_command(
-                    checkpoint_id.unwrap(),
-                    progress,
-                )?
+                cli::interactive::interactive_restore_command(selective_files)?
             } else {
-                commands::restore::restore_command(
-                    checkpoint_id.unwrap(),
-                    progress,
-                    selective_files,
-                )?
+                commands::restore::restore_command(checkpoint_id.unwrap(), selective_files)?
             }
         }
         Commands::Branch { name, from_id } => commands::branch::branch_command(name, from_id)?,
@@ -71,50 +52,23 @@ fn run() -> Result<()> {
                 commands::switch::switch_command(name.unwrap())?
             }
         }
-        Commands::Latest { progress } => commands::latest::latest_command(progress)?,
         Commands::Diff {
             id1,
             id2,
             file,
-            side_by_side,
             interactive,
         } => {
             if interactive || id1.is_none() || id2.is_none() {
-                cli::interactive::interactive_diff_command(file, side_by_side)?
+                cli::interactive::interactive_diff_command(file)?
             } else {
-                commands::diff::diff_command(id1.unwrap(), id2.unwrap(), file, side_by_side)?
+                commands::diff::diff_command(id1.unwrap(), id2.unwrap(), file)?
             }
         }
-        Commands::Select { action } => match action {
-            SelectCommands::Restore { progress } => {
-                cli::interactive::interactive_restore_command(progress, None)?
-            }
-            SelectCommands::Switch => cli::interactive::interactive_switch_command()?,
-            SelectCommands::Diff { side_by_side } => {
-                cli::interactive::interactive_diff_command(None, side_by_side)?
-            }
+        Commands::Config { action } => match action {
+            ConfigCommands::Show => commands::config::config_show_command()?,
+            ConfigCommands::Path => commands::config::config_path_command()?,
         },
-        Commands::Graph {
-            detailed,
-            track,
-            compact,
-        } => commands::graph::graph_command(detailed, track, compact)?,
-        Commands::Config { action } => commands::config::config_command(action)?,
         Commands::Reset { confirm } => commands::reset::reset_command(confirm)?,
-        Commands::Watch {
-            interval,
-            stop,
-            on_save,
-        } => commands::watch::watch_command(interval, stop, on_save)?,
-        Commands::Rewind {
-            duration,
-            to,
-            progress,
-        } => commands::rewind::rewind_command(duration, to, progress)?,
-        Commands::Fastforward { progress } => commands::fastforward::fastforward_command(progress)?,
-        Commands::Timeline { track, detailed } => {
-            commands::timeline::timeline_command(track, detailed)?
-        }
     }
     Ok(())
 }

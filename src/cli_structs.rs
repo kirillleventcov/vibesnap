@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[clap(
     name = "vibesnap",
-    version = "0.1.0",
+    version = "1.0.0",
     about = "Snapshot-style version control for AI-first coding"
 )]
 pub struct Cli {
@@ -12,7 +12,7 @@ pub struct Cli {
     pub command: Commands,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Create a new VibeSnap repo
     Init {
@@ -25,23 +25,17 @@ pub enum Commands {
         paths: Vec<PathBuf>,
         #[clap(short, long, default_value = "")]
         note: String,
-        #[clap(long, help = "Show progress bar for large operations")]
-        progress: bool,
         #[clap(
             long,
-            help = "Snap only specific files (comma-separated)",
-            value_delimiter = ','
+            help = "Snap only specific files (repeatable)",
+            num_args = 1..
         )]
-        files: Vec<PathBuf>,
-        #[clap(long, help = "Snap only the specified file")]
-        file: Option<PathBuf>,
+        file: Vec<PathBuf>,
     },
     /// List checkpoints
     List {
         #[clap(short, long)]
         track: Option<String>,
-        #[clap(long, help = "Show files in each checkpoint as a tree")]
-        tree: bool,
         #[clap(long, help = "Interactive selection mode")]
         interactive: bool,
         #[clap(long, help = "Show only checkpoints containing this file")]
@@ -52,18 +46,12 @@ pub enum Commands {
         checkpoint_id: Option<String>,
         #[clap(long, help = "Interactive selection mode")]
         interactive: bool,
-        #[clap(long, help = "Show progress bar for large operations")]
-        progress: bool,
         #[clap(
             long,
-            help = "Restore only specific files (comma-separated)",
-            value_delimiter = ','
+            help = "Restore only specific files (repeatable)",
+            num_args = 1..
         )]
-        files: Vec<PathBuf>,
-        #[clap(long, help = "Restore only the specified file")]
-        file: Option<PathBuf>,
-        #[clap(long, help = "Interactive file selection within checkpoint")]
-        interactive_files: bool,
+        file: Vec<PathBuf>,
     },
     /// Create a new track
     Branch {
@@ -77,34 +65,13 @@ pub enum Commands {
         #[clap(long, help = "Interactive selection mode")]
         interactive: bool,
     },
-    /// Restore the latest checkpoint on the current track
-    Latest {
-        #[clap(long, help = "Show progress bar for large operations")]
-        progress: bool,
-    },
     /// Show unified diff between two checkpoints (text files)
     Diff {
         id1: Option<String>,
         id2: Option<String>,
         file: Option<PathBuf>,
-        #[clap(long, help = "Show side-by-side diff view")]
-        side_by_side: bool,
         #[clap(long, help = "Interactive selection mode")]
         interactive: bool,
-    },
-    /// Interactive checkpoint selection
-    Select {
-        #[clap(subcommand)]
-        action: SelectCommands,
-    },
-    /// Show a visual graph of checkpoints and branches
-    Graph {
-        #[clap(long, help = "Show detailed information for each checkpoint")]
-        detailed: bool,
-        #[clap(long, help = "Show only specific track")]
-        track: Option<String>,
-        #[clap(long, help = "Compact view (less spacing)")]
-        compact: bool,
     },
     /// Manage configuration settings
     Config {
@@ -116,69 +83,12 @@ pub enum Commands {
         #[clap(long, help = "Skips the confirmation prompt")]
         confirm: bool,
     },
-    /// Automatically create checkpoints at regular intervals or on file save
-    Watch {
-        #[clap(long, help = "Set interval in minutes (default: from config)")]
-        interval: Option<u64>,
-        #[clap(long, help = "Stop the watch daemon")]
-        stop: bool,
-        #[clap(long, help = "Watch for file saves instead of time-based")]
-        on_save: bool,
-    },
-    /// Rewind to an earlier point in time
-    Rewind {
-        #[clap(long, help = "Duration to rewind (e.g., 30m, 2h, 1h30m)")]
-        duration: Option<String>,
-        #[clap(long, help = "Rewind to specific time today (HH:MM or HH:MM:SS)")]
-        to: Option<String>,
-        #[clap(long, help = "Show progress bar for large operations")]
-        progress: bool,
-    },
-    /// Fast-forward to the next checkpoint in the timeline
-    Fastforward {
-        #[clap(long, help = "Show progress bar for large operations")]
-        progress: bool,
-    },
-    /// Show a visual timeline of checkpoints
-    Timeline {
-        #[clap(long, help = "Show only specific track")]
-        track: Option<String>,
-        #[clap(long, help = "Show detailed information")]
-        detailed: bool,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone)]
-pub enum SelectCommands {
-    /// Interactively restore a checkpoint
-    Restore {
-        #[clap(long, help = "Show progress bar for large operations")]
-        progress: bool,
-    },
-    /// Interactively switch track
-    Switch,
-    /// Interactively diff two checkpoints
-    Diff {
-        #[clap(long, help = "Show side-by-side diff view")]
-        side_by_side: bool,
-    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum ConfigCommands {
     /// Show current configuration
     Show,
-    /// Edit configuration file
-    Edit,
-    /// Set a configuration value
-    Set { key: String, value: String },
-    /// Get a configuration value
-    Get { key: String },
-    /// Reset configuration to defaults
-    Reset {
-        #[clap(long)]
-        confirm: bool,
-    },
     /// Show configuration file location
     Path,
 }
