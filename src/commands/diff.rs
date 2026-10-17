@@ -7,11 +7,7 @@ use colored::*;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-pub fn diff_command(
-    id1: String,
-    id2: String,
-    file_path_opt: Option<PathBuf>,
-) -> Result<()> {
+pub fn diff_command(id1: String, id2: String, file_path_opt: Option<PathBuf>) -> Result<()> {
     let root = find_repo_root(None)?;
     let manifest1 = load_snapshot_manifest(&root, &id1)?;
     let manifest2 = load_snapshot_manifest(&root, &id2)?;

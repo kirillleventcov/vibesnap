@@ -65,9 +65,7 @@ pub fn interactive_list_selection(
     Ok(())
 }
 
-pub fn interactive_restore_command(
-    selective_files: Option<Vec<PathBuf>>,
-) -> Result<()> {
+pub fn interactive_restore_command(selective_files: Option<Vec<PathBuf>>) -> Result<()> {
     let root = find_repo_root(None)?;
     let conn = db_connect(&root)?;
 

@@ -59,7 +59,10 @@ pub fn list_checkpoints_command(
 
     if checkpoints.is_empty() {
         if let Some(ref file_path) = file_filter {
-            println!("No checkpoints found containing file: {}", file_path.display());
+            println!(
+                "No checkpoints found containing file: {}",
+                file_path.display()
+            );
         } else {
             println!("No checkpoints found.");
         }

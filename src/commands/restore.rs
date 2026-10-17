@@ -9,10 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-pub fn restore_command(
-    checkpoint_id: String,
-    selective_files: Option<Vec<PathBuf>>,
-) -> Result<()> {
+pub fn restore_command(checkpoint_id: String, selective_files: Option<Vec<PathBuf>>) -> Result<()> {
     let root = find_repo_root(None)?;
     let manifest = load_snapshot_manifest(&root, &checkpoint_id)?;
     let (current_track_name, _) = read_head(&root)?;
@@ -53,10 +50,7 @@ pub fn restore_command(
     }
 
     let files_info = if selective_files.is_some() {
-        format!(
-            " ({} files)",
-            filtered_manifest.files.len()
-        )
+        format!(" ({} files)", filtered_manifest.files.len())
     } else {
         format!(" ({} files)", filtered_manifest.files.len())
     };
@@ -65,7 +59,11 @@ pub fn restore_command(
         "{}",
         format!(
             "Restored{}{} from checkpoint {}",
-            if selective_files.is_some() { " files" } else { "" },
+            if selective_files.is_some() {
+                " files"
+            } else {
+                ""
+            },
             files_info,
             checkpoint_id.green()
         )
