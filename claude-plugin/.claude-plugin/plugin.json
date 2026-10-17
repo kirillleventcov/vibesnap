@@ -1,0 +1,10 @@
+{
+  "name": "vibesnap",
+  "version": "2.0.0",
+  "description": "Records every file change Claude, its subagents, shell commands and the user make, and lets Claude query, undo and commit them.",
+  "author": { "name": "Kirill Leventcov" },
+  "homepage": "https://github.com/kirillleventcov/vibesnap",
+  "repository": "https://github.com/kirillleventcov/vibesnap",
+  "license": "MIT",
+  "keywords": ["history", "undo", "checkpoints", "subagents"]
+}

@@ -1,45 +1,42 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 
-#[derive(Serialize, Deserialize, Debug)]
+/// User configuration from `~/.config/vibesnap/config.toml`. Every field is
+/// optional in the file.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct Config {
-    #[serde(default = "default_user")]
-    user: String,
-    #[serde(default = "default_auto_note_format")]
-    auto_note_format: String,
-    #[serde(default = "default_track_name")]
-    default_track: String,
-    #[serde(flatten)]
-    pub extra: HashMap<String, toml::Value>,
-}
-
-fn default_user() -> String {
-    "anonymous".to_string()
-}
-
-fn default_auto_note_format() -> String {
-    "Auto-snap by {user} at {timestamp}".to_string()
-}
-
-fn default_track_name() -> String {
-    "main".to_string()
+    /// `on` (default): the Stop hook tells the user when a turn left uncommitted
+    /// agent changes. `off`: never. `ask-agent`: block the stop so Claude asks.
+    pub commit_offer: String,
+    /// Days of history `vs gc` keeps. Labels are kept until deleted.
+    pub retention_days: u64,
+    /// Files larger than this are not recorded (and never touched by restore or undo).
+    pub max_file_size: u64,
+    /// The SessionStart hook creates a store only at a git top level with at most
+    /// this many files.
+    pub auto_init_max_files: usize,
+    /// Whether the SessionStart hook may create a store at a git top level.
+    pub auto_init: bool,
+    /// Extra patterns never recorded, on top of `.env*`, `*.pem` and `*.key`.
+    pub secret_patterns: Vec<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
-            user: default_user(),
-            auto_note_format: default_auto_note_format(),
-            default_track: default_track_name(),
-            extra: HashMap::new(),
+            commit_offer: "on".into(),
+            retention_days: 7,
+            max_file_size: 5 * 1024 * 1024,
+            auto_init_max_files: 100_000,
+            auto_init: true,
+            secret_patterns: Vec::new(),
         }
     }
 }
 
 impl Config {
-    pub fn config_path() -> PathBuf {
+    pub fn path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("vibesnap")
@@ -47,22 +44,9 @@ impl Config {
     }
 
     pub fn load() -> Self {
-        let path = Self::config_path();
-        if !path.exists() {
-            return Config::default();
-        }
-        let content = fs::read_to_string(path).unwrap_or_default();
-        toml::from_str(&content).unwrap_or_default()
-    }
-
-    pub fn format_auto_note(&self) -> String {
-        self.auto_note_format.replace("{user}", &self.user).replace(
-            "{timestamp}",
-            &chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        )
-    }
-
-    pub fn get_default_track(&self) -> &str {
-        &self.default_track
+        std::fs::read_to_string(Self::path())
+            .ok()
+            .and_then(|content| toml::from_str(&content).ok())
+            .unwrap_or_default()
     }
 }
