@@ -144,16 +144,17 @@ Measured with `bench/bench.py` on a 4-core Linux container: 20,000 text files (1
 
 | Operation | vibesnap 2 | vibesnap 1 | git | Roadmap budget |
 | --- | --- | --- | --- | --- |
-| First snapshot, git repo | 0.19–0.37 s | 2.95 s | 4.6–6.9 s (`add -A`) | 0.1 s |
-| First snapshot, no git | 1.7–3.6 s | 2.95 s | — | 3 s |
-| Snapshot with nothing changed | 40–56 ms | 1.56 s | 42 ms (`status`) | 50 ms |
-| Edit hook (PostToolUse), median / p95 | 7 / 9 ms | — | — | 5 ms |
+| First snapshot, git repo (seeded from `.git/index`) | 0.19–0.44 s | 2.95 s | 4.0–6.9 s (`add -A`) | 0.1 s |
+| First snapshot, no git | 1.5–3.6 s | 2.95 s | — | 3 s |
+| Snapshot with nothing changed | 40–58 ms | 1.56 s | 41–51 ms (`status`) | 50 ms |
+| Edit hook (PostToolUse), median / p95 | 7–8 / 9–11 ms | — | — | 5 ms |
 | Edit hook (PreToolUse), p95 | 4 ms | — | — | 2 ms |
-| Prompt hook (reconcile, nothing changed), p95 | 61 ms | — | — | 50 ms |
+| Prompt hook (reconcile, nothing changed), p95 | 61–66 ms | — | — | 50 ms |
 | Restore, one file differs | 85–110 ms | 2.27 s (rewrites all) | — | proportional to the change |
-| Store size, git repo, after gc | 3.9 MB | 181 MB | 3.9 MB (`.git`) | no larger than `.git` |
+| Store size, git repo, after `vs gc` | 3.9–4.2 MB | 181 MB | 3.9 MB (`.git`) | no larger than `.git` |
+| Store size, no git, after `vs gc` | 6–11 MB | 181 MB | — | — |
 
-Ranges are across runs on this (noisy) machine. Where a budget is missed, the remaining time is mostly process start-up and SQLite. Set `VIBESNAP_TRACE=1` to print where a scan or hook spends its time.
+Ranges are across runs on this (noisy) machine. Where a budget is missed: the no-op snapshot and the prompt hook are bound by the parallel stat walk (about 40 ms for 20,000 files here, which a file watcher would remove), and the edit hooks by process start-up, opening SQLite and writing the event's objects. Set `VIBESNAP_TRACE=1` to print where a scan or hook spends its time.
 
 ## Not done yet
 
