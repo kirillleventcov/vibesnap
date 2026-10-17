@@ -1,7 +1,11 @@
+pub mod apply;
+pub mod checkpoint;
 pub mod constants;
 pub mod db;
+pub mod fsutil;
 pub mod ignore;
+pub mod lock;
 pub mod objects;
+pub mod paths;
 pub mod repo;
 pub mod snapshot;
-pub mod utils;

@@ -4,10 +4,13 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[clap(
     name = "vibesnap",
-    version = "1.0.0",
+    version,
     about = "Snapshot-style version control for AI-first coding"
 )]
 pub struct Cli {
+    /// Print machine-readable JSON (schema version "v": 1)
+    #[clap(long, global = true)]
+    pub json: bool,
     #[clap(subcommand)]
     pub command: Commands,
 }
@@ -19,15 +22,16 @@ pub enum Commands {
         #[clap(default_value = ".")]
         path: PathBuf,
     },
-    /// Create a checkpoint from the given paths
+    /// Create a checkpoint. With paths, only those are re-read and the rest of the
+    /// tree keeps its state from HEAD
     Snap {
-        #[clap(default_value = ".")]
+        /// Files or directories, relative to the current directory. Default: the whole repo
         paths: Vec<PathBuf>,
         #[clap(short, long, default_value = "")]
         note: String,
         #[clap(
             long,
-            help = "Snap only specific files (repeatable)",
+            help = "Snap only specific files (repeatable; same as passing paths)",
             num_args = 1..
         )]
         file: Vec<PathBuf>,
@@ -36,15 +40,15 @@ pub enum Commands {
     List {
         #[clap(short, long)]
         track: Option<String>,
-        #[clap(long, help = "Interactive selection mode")]
+        #[clap(short, long, help = "Interactive selection mode (needs a terminal)")]
         interactive: bool,
         #[clap(long, help = "Show only checkpoints containing this file")]
         file: Option<PathBuf>,
     },
-    /// Restore a checkpoint into the working tree (detached)
+    /// Restore a checkpoint into the working tree. The current state is saved first
     Restore {
         checkpoint_id: Option<String>,
-        #[clap(long, help = "Interactive selection mode")]
+        #[clap(short, long, help = "Interactive selection mode (needs a terminal)")]
         interactive: bool,
         #[clap(
             long,
@@ -62,7 +66,7 @@ pub enum Commands {
     /// Switch to another track and sync files
     Switch {
         name: Option<String>,
-        #[clap(long, help = "Interactive selection mode")]
+        #[clap(short, long, help = "Interactive selection mode (needs a terminal)")]
         interactive: bool,
     },
     /// Show unified diff between two checkpoints (text files)
@@ -70,7 +74,7 @@ pub enum Commands {
         id1: Option<String>,
         id2: Option<String>,
         file: Option<PathBuf>,
-        #[clap(long, help = "Interactive selection mode")]
+        #[clap(short, long, help = "Interactive selection mode (needs a terminal)")]
         interactive: bool,
     },
     /// Manage configuration settings
@@ -80,7 +84,10 @@ pub enum Commands {
     },
     /// Irreversibly delete the .vibe repo and all snaps
     Reset {
-        #[clap(long, help = "Skips the confirmation prompt")]
+        #[clap(
+            long,
+            help = "Skips the confirmation prompt (required without a terminal)"
+        )]
         confirm: bool,
     },
 }

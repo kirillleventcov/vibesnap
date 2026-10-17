@@ -1,36 +1,34 @@
+use crate::commands::format_timestamp;
+use crate::vibe::checkpoint::Checkpoint;
 use crate::vibe::snapshot::SnapshotManifest;
-use chrono::{Local, TimeZone};
 use colored::Colorize;
 use similar::{ChangeTag, TextDiff};
 
 pub fn display_compact_checkpoints(
-    checkpoints: Vec<(String, String, Option<String>, i64, Option<String>)>,
+    checkpoints: &[Checkpoint],
     current_checkpoint_id: Option<String>,
 ) {
-    for (id, _track, _parent, timestamp, note) in checkpoints {
-        let dt = Local
-            .timestamp_opt(timestamp, 0)
-            .single()
-            .unwrap_or_default()
-            .format("%Y-%m-%d %H:%M:%S");
+    for checkpoint in checkpoints {
+        let id = &checkpoint.id;
+        let dt = format_timestamp(checkpoint.timestamp);
 
-        let marker = if Some(&id) == current_checkpoint_id.as_ref() {
+        let marker = if Some(id) == current_checkpoint_id.as_ref() {
             "●".green()
         } else {
             "◆".cyan()
         };
 
-        let id_display = if Some(&id) == current_checkpoint_id.as_ref() {
+        let id_display = if Some(id) == current_checkpoint_id.as_ref() {
             id.green().bold()
         } else {
             id.normal()
         };
 
-        let note_display = note.unwrap_or_default();
+        let note_display = checkpoint.note.clone().unwrap_or_default();
         println!(
             "{} {} {} - {}",
             marker,
-            dt.to_string().bright_black(),
+            dt.bright_black(),
             id_display,
             note_display.bright_black()
         );
@@ -54,13 +52,19 @@ pub fn show_unified_diff(text1: &str, text2: &str, file_name: &str) {
     println!("+++ b/{}", file_name.green());
     for change in diff.iter_all_changes() {
         match change.tag() {
-            ChangeTag::Delete => {
-                println!("{} {}", "-".red().bold(), change.to_string().red())
-            }
-            ChangeTag::Insert => {
-                println!("{} {}", "+".green().bold(), change.to_string().green())
-            }
-            ChangeTag::Equal => println!("  {}", change),
+            // Each change already ends with its newline (except a final line
+            // without one), so print! instead of println! to avoid double spacing.
+            ChangeTag::Delete => print_line("-".red().bold(), change.to_string().red()),
+            ChangeTag::Insert => print_line("+".green().bold(), change.to_string().green()),
+            ChangeTag::Equal => print_line(" ".normal(), change.to_string().normal()),
         }
+    }
+}
+
+fn print_line(sign: colored::ColoredString, line: colored::ColoredString) {
+    if line.ends_with('\n') {
+        print!("{}{}", sign, line);
+    } else {
+        println!("{}{}", sign, line);
     }
 }

@@ -1,26 +1,26 @@
 use crate::config::Config;
-use crate::error::Result;
+use crate::error::{AppError, Result};
 use crate::vibe::{
-    db::db_connect,
-    repo::{find_repo_root, read_head, write_head},
-    snapshot::{build_snapshot_manifest, save_snapshot_manifest},
-    utils::generate_id,
+    checkpoint::{manifest_covers, record_state},
+    lock::lock_repo,
+    paths::resolve_user_paths,
+    repo::Repo,
+    snapshot::load_snapshot_manifest,
 };
 use colored::*;
 use std::path::PathBuf;
 
-pub fn snap_command(
-    paths: Vec<PathBuf>,
-    note: String,
-    selective_files: Option<Vec<PathBuf>>,
-) -> Result<()> {
+pub fn snap_command(paths: Vec<PathBuf>, note: String, json: bool) -> Result<()> {
     let config = Config::load();
-    let root = find_repo_root(None)?;
-    let (track, parent_id) = read_head(&root)?;
+    let mut repo = Repo::open()?;
 
-    let conn = db_connect(&root)?;
-
-    let checkpoint_id = generate_id(&track);
+    let scope = resolve_user_paths(&repo.root, &paths)?;
+    // A path that resolves to the repo root means the whole tree.
+    let scope: Vec<String> = if scope.iter().any(|p| p.is_empty()) {
+        Vec::new()
+    } else {
+        scope
+    };
 
     // Use auto-note if no note provided
     let final_note = if note.is_empty() {
@@ -29,60 +29,74 @@ pub fn snap_command(
         note
     };
 
-    // Determine what to snap
-    let paths_to_process_input = match &selective_files {
-        Some(files) => files.clone(),
-        None => {
-            if paths.is_empty() || (paths.len() == 1 && paths[0] == PathBuf::from(".")) {
-                vec![PathBuf::from(".")]
-            } else {
-                paths
+    let lock = lock_repo(&repo.root)?;
+
+    if !scope.is_empty() {
+        let head_manifest = match repo.head()?.checkpoint {
+            Some(id) => Some(load_snapshot_manifest(&repo.root, &id)?),
+            None => None,
+        };
+        for path in &scope {
+            let known = head_manifest
+                .as_ref()
+                .is_some_and(|m| manifest_covers(m, path));
+            if !repo.root.join(path).exists() && !known {
+                return Err(AppError::Usage(format!("Path not found: {path}")));
             }
         }
-    };
+    }
 
-    let manifest = build_snapshot_manifest(&root, &paths_to_process_input)?;
+    let recorded = record_state(&mut repo, &lock, &scope, &final_note)?;
+    let file_count = recorded.manifest.files.len();
 
-    // Save the manifest
-    save_snapshot_manifest(&root, &checkpoint_id, &manifest)?;
+    if json {
+        let mut out = serde_json::json!({
+            "v": 1,
+            "created": recorded.created,
+            "id": recorded.id,
+            "parent": recorded.parent,
+            "track": recorded.track,
+            "files": file_count,
+            "complete": recorded.complete,
+            "paths": scope,
+        });
+        if recorded.created {
+            out["note"] = final_note.into();
+        }
+        println!("{out}");
+        return Ok(());
+    }
 
-    conn.execute(
-        "INSERT INTO checkpoints(id, track, parent, timestamp, note) VALUES (?, ?, ?, ?, ?)",
-        rusqlite::params![
-            checkpoint_id,
-            track,
-            parent_id,
-            chrono::Utc::now().timestamp(),
-            final_note
-        ],
-    )?;
+    if !recorded.created {
+        println!(
+            "Nothing changed since {}",
+            recorded.id.as_deref().unwrap_or_default()
+        );
+        return Ok(());
+    }
 
-    conn.execute(
-        "UPDATE tracks SET head = ? WHERE name = ?",
-        rusqlite::params![checkpoint_id, track],
-    )?;
-
-    write_head(&root, &track, Some(&checkpoint_id))?;
-
-    let file_count = manifest.files.len();
-    let files_info = if let Some(ref selective) = selective_files {
-        format!(
-            " ({} files: {})",
-            file_count,
-            selective
-                .iter()
-                .map(|p| p.to_string_lossy())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    } else {
+    let files_info = if scope.is_empty() {
         format!(" ({} files)", file_count)
+    } else {
+        format!(" ({} files; re-read: {})", file_count, scope.join(", "))
     };
-
     println!(
         "{}",
-        format!("snap {}{} - {}", checkpoint_id, files_info, final_note).green()
+        format!(
+            "snap {}{} - {}",
+            recorded.id.as_deref().unwrap_or_default(),
+            files_info,
+            final_note
+        )
+        .green()
     );
+    if !recorded.complete {
+        eprintln!(
+            "{}",
+            "Note: HEAD does not cover the whole tree, so this checkpoint holds only part of it. Run 'vibesnap snap' with no paths to record everything."
+                .yellow()
+        );
+    }
 
     Ok(())
 }

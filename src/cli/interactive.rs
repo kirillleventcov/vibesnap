@@ -1,39 +1,40 @@
-use crate::commands::{diff::diff_command, restore::restore_command, switch::switch_command};
+use crate::commands::{
+    diff::diff_command, format_timestamp, restore::restore_command, switch::switch_command,
+};
 use crate::error::{AppError, Result};
-use crate::vibe::db::db_connect;
-use crate::vibe::repo::find_repo_root;
+use crate::vibe::checkpoint::{Checkpoint, list_checkpoints};
+use crate::vibe::repo::Repo;
 use crate::vibe::snapshot::load_snapshot_manifest;
-use chrono::{Local, TimeZone};
 use dialoguer::{Select, theme::ColorfulTheme};
 use std::path::PathBuf;
 
 use super::display::display_file_tree;
 
-fn checkpoint_items(
-    checkpoints: &[(String, String, Option<String>, i64, Option<String>)],
-) -> Vec<String> {
+fn checkpoint_items(checkpoints: &[Checkpoint]) -> Vec<String> {
     checkpoints
         .iter()
-        .map(|(id, track, _, timestamp, note)| {
-            let local_datetime = Local
-                .timestamp_opt(*timestamp, 0)
-                .single()
-                .unwrap_or_default();
+        .map(|c| {
             format!(
                 "{} ({}) - {} - {}",
-                id,
-                track,
-                local_datetime.format("%Y-%m-%d %H:%M:%S"),
-                note.as_deref().unwrap_or("No note")
+                c.id,
+                c.track,
+                format_timestamp(c.timestamp),
+                c.note.as_deref().unwrap_or("No note")
             )
         })
         .collect()
 }
 
-pub fn interactive_list_selection(
-    checkpoints: Vec<(String, String, Option<String>, i64, Option<String>)>,
-) -> Result<()> {
-    let root = find_repo_root(None)?;
+/// All checkpoints, newest first.
+fn newest_first() -> Result<Vec<Checkpoint>> {
+    let repo = Repo::open()?;
+    let mut checkpoints = list_checkpoints(&repo.conn, None)?;
+    checkpoints.reverse();
+    Ok(checkpoints)
+}
+
+pub fn interactive_list_selection(checkpoints: Vec<Checkpoint>) -> Result<()> {
+    let root = Repo::open()?.root;
     let items = checkpoint_items(&checkpoints);
 
     let selection = Select::with_theme(&ColorfulTheme::default())
@@ -42,7 +43,7 @@ pub fn interactive_list_selection(
         .items(&items)
         .interact()?;
 
-    let (selected_id, _, _, _, _) = &checkpoints[selection];
+    let selected_id = &checkpoints[selection].id;
 
     let actions = vec!["Restore", "Show Details", "Cancel"];
     let action = Select::with_theme(&ColorfulTheme::default())
@@ -52,7 +53,7 @@ pub fn interactive_list_selection(
         .interact()?;
 
     match action {
-        0 => restore_command(selected_id.to_string(), None)?,
+        0 => restore_command(selected_id.to_string(), Vec::new(), false)?,
         1 => {
             if let Ok(manifest) = load_snapshot_manifest(&root, selected_id) {
                 println!("\nCheckpoint: {}", selected_id);
@@ -65,24 +66,8 @@ pub fn interactive_list_selection(
     Ok(())
 }
 
-pub fn interactive_restore_command(selective_files: Option<Vec<PathBuf>>) -> Result<()> {
-    let root = find_repo_root(None)?;
-    let conn = db_connect(&root)?;
-
-    let mut stmt = conn.prepare(
-        "SELECT id, track, parent, timestamp, note FROM checkpoints ORDER BY timestamp DESC",
-    )?;
-    let checkpoint_iter = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, Option<String>>(4)?,
-        ))
-    })?;
-
-    let checkpoints: Vec<_> = checkpoint_iter.collect::<std::result::Result<_, _>>()?;
+pub fn interactive_restore_command(selective_files: Vec<PathBuf>) -> Result<()> {
+    let checkpoints = newest_first()?;
 
     if checkpoints.is_empty() {
         println!("No checkpoints found.");
@@ -97,15 +82,12 @@ pub fn interactive_restore_command(selective_files: Option<Vec<PathBuf>>) -> Res
         .items(&items)
         .interact()?;
 
-    let (selected_id, _, _, _, _) = &checkpoints[selection];
-    restore_command(selected_id.to_string(), selective_files)
+    restore_command(checkpoints[selection].id.clone(), selective_files, false)
 }
 
 pub fn interactive_switch_command() -> Result<()> {
-    let root = find_repo_root(None)?;
-    let conn = db_connect(&root)?;
-
-    let mut stmt = conn.prepare("SELECT name FROM tracks ORDER BY name")?;
+    let repo = Repo::open()?;
+    let mut stmt = repo.conn.prepare("SELECT name FROM tracks ORDER BY name")?;
     let tracks: Vec<String> = stmt
         .query_map([], |row| row.get(0))?
         .collect::<std::result::Result<_, _>>()?;
@@ -121,27 +103,11 @@ pub fn interactive_switch_command() -> Result<()> {
         .items(&tracks)
         .interact()?;
 
-    switch_command(tracks[selection].clone())
+    switch_command(tracks[selection].clone(), false)
 }
 
 pub fn interactive_diff_command(file_path_opt: Option<PathBuf>) -> Result<()> {
-    let root = find_repo_root(None)?;
-    let conn = db_connect(&root)?;
-
-    let mut stmt = conn.prepare(
-        "SELECT id, track, parent, timestamp, note FROM checkpoints ORDER BY timestamp DESC",
-    )?;
-    let checkpoints: Vec<_> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, Option<String>>(4)?,
-            ))
-        })?
-        .collect::<std::result::Result<_, _>>()?;
+    let checkpoints = newest_first()?;
 
     if checkpoints.len() < 2 {
         return Err(AppError::NotEnoughCheckpointsForDiff);
@@ -165,8 +131,10 @@ pub fn interactive_diff_command(file_path_opt: Option<PathBuf>) -> Result<()> {
         .items(&items)
         .interact()?;
 
-    let (id1, _, _, _, _) = &checkpoints[selection1];
-    let (id2, _, _, _, _) = &checkpoints[selection2];
-
-    diff_command(id1.clone(), id2.clone(), file_path_opt)
+    diff_command(
+        checkpoints[selection1].id.clone(),
+        checkpoints[selection2].id.clone(),
+        file_path_opt,
+        false,
+    )
 }

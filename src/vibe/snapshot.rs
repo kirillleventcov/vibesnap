@@ -1,219 +1,210 @@
 use crate::error::{AppError, Result};
 use colored::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use walkdir;
 
 use super::constants::{REPO_DIRNAME, SNAPSHOTS_DIRNAME};
-use super::ignore::{read_ignore_patterns, should_ignore_path};
-use super::objects::store_content_in_objects;
+use super::ignore::{is_ignored, read_ignore_patterns};
+use super::objects::ObjectStore;
+use super::paths::{in_scope, to_slash};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct SnapshotManifest {
-    pub files: HashMap<String, String>, // path -> content hash
+    pub files: BTreeMap<String, String>, // path -> content hash
 }
 
-// Helper function to save snapshot manifest
-pub fn save_snapshot_manifest(
+fn manifest_path(root: &Path, checkpoint_id: &str) -> PathBuf {
+    root.join(REPO_DIRNAME)
+        .join(SNAPSHOTS_DIRNAME)
+        .join(format!("{}.json", checkpoint_id))
+}
+
+/// Writes the manifest for a new checkpoint. Returns `Ok(false)` without touching
+/// anything if a manifest with this ID already exists, so an ID collision can never
+/// overwrite an existing checkpoint.
+pub fn write_new_manifest(
     root: &Path,
     checkpoint_id: &str,
     manifest: &SnapshotManifest,
-) -> Result<()> {
-    let snapshots_dir: PathBuf = root.join(REPO_DIRNAME).join(SNAPSHOTS_DIRNAME);
-    fs::create_dir_all(&snapshots_dir)?;
-
-    let manifest_path: PathBuf = snapshots_dir.join(format!("{}.json", checkpoint_id));
-    let json_content: String = serde_json::to_string_pretty(manifest)
+) -> Result<bool> {
+    let path = manifest_path(root, checkpoint_id);
+    fs::create_dir_all(path.parent().unwrap())?;
+    let json_content = serde_json::to_vec(manifest)
         .map_err(|e| AppError::Generic(format!("Failed to serialize manifest: {e}")))?;
 
-    fs::write(manifest_path, json_content).map_err(AppError::Io)
+    let mut file = match fs::File::create_new(&path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(e) => return Err(AppError::Io(e)),
+    };
+    if let Err(e) = file.write_all(&json_content) {
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(AppError::Io(e));
+    }
+    Ok(true)
 }
 
-// Helper function to load snapshot manifest
+pub fn remove_manifest(root: &Path, checkpoint_id: &str) {
+    let _ = fs::remove_file(manifest_path(root, checkpoint_id));
+}
+
 pub fn load_snapshot_manifest(root: &Path, checkpoint_id: &str) -> Result<SnapshotManifest> {
-    let manifest_path: PathBuf = root
-        .join(REPO_DIRNAME)
-        .join(SNAPSHOTS_DIRNAME)
-        .join(format!("{}.json", checkpoint_id));
-
-    if !manifest_path.exists() {
-        return Err(AppError::CheckpointNotFound(checkpoint_id.to_string()));
-    }
-
-    let json_content: String = fs::read_to_string(manifest_path)?;
+    let json_content = match fs::read_to_string(manifest_path(root, checkpoint_id)) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(AppError::CheckpointNotFound(checkpoint_id.to_string()));
+        }
+        Err(e) => return Err(AppError::Io(e)),
+    };
     serde_json::from_str(&json_content)
         .map_err(|e| AppError::Generic(format!("Failed to deserialize manifest: {e}")))
 }
 
-// Helper function to build snapshot manifest from paths
-pub fn build_snapshot_manifest(
-    root: &Path,
-    paths_to_snap_relative_to_root_or_absolute: &[PathBuf],
-) -> Result<SnapshotManifest> {
-    let mut manifest: SnapshotManifest = SnapshotManifest {
-        files: HashMap::new(),
+/// Reads the working tree under `scope` (repo-relative prefixes; empty means the
+/// whole tree), stores every file's content and returns the resulting manifest.
+/// Ignored directories are pruned rather than walked, and `.vibe` and `.git` are
+/// always skipped.
+pub fn scan(root: &Path, scope: &[String], store: &ObjectStore) -> Result<SnapshotManifest> {
+    let patterns = read_ignore_patterns(root)?;
+    let mut manifest = SnapshotManifest::default();
+    let whole_tree = [String::new()];
+    let prefixes = if scope.is_empty() {
+        &whole_tree[..]
+    } else {
+        scope
     };
 
-    // Read ignore patterns (prioritizing .gitignore over .vibeignore)
-    let ignore_patterns = read_ignore_patterns(root)?;
-
-    for p_user_input in paths_to_snap_relative_to_root_or_absolute {
-        let path_to_process: PathBuf = if p_user_input.is_absolute() {
-            p_user_input.clone()
-        } else {
-            root.join(p_user_input)
-        };
-
-        let source_path_canon: PathBuf = match path_to_process.canonicalize() {
-            Ok(cp) => cp,
-            Err(_e) => {
-                eprintln!(
-                    "{}",
-                    format!(
-                        "Warning: Path {} could not be canonicalized (e.g. non-existent or broken link) - skipped",
-                        path_to_process.display()
-                    )
-                    .yellow()
-                );
-                continue;
-            }
-        };
-
-        if !source_path_canon.exists() {
+    for prefix in prefixes {
+        if !prefix.is_empty() && is_ignored(prefix, &patterns) {
             eprintln!(
                 "{}",
-                format!(
-                    "Warning: {} does not exist - skipped",
-                    source_path_canon.display()
-                )
-                .yellow()
+                format!("Ignored: {} (matches ignore pattern)", prefix).yellow()
             );
             continue;
         }
-
-        // Check if this path should be ignored
-        if should_ignore_path(&source_path_canon, root, &ignore_patterns) {
-            eprintln!(
-                "{}",
-                format!(
-                    "Ignored: {} (matches ignore pattern)",
-                    source_path_canon.display()
-                )
-                .yellow()
-            );
+        let path = root.join(prefix);
+        // A missing path is simply absent from the result, which records its deletion.
+        let Ok(meta) = fs::metadata(&path) else {
+            continue;
+        };
+        if meta.is_file() {
+            add_file(store, &mut manifest, &path, prefix.clone());
             continue;
         }
-
-        let storage_rel_path: PathBuf = source_path_canon
-            .strip_prefix(root)
-            .map(|rel: &Path| rel.to_path_buf())
-            .unwrap_or_else(|_| {
-                PathBuf::from(
-                    source_path_canon
-                        .file_name()
-                        .unwrap_or_else(|| source_path_canon.as_os_str()),
-                )
+        if !meta.is_dir() {
+            continue;
+        }
+        let walker = walkdir::WalkDir::new(&path)
+            .into_iter()
+            .filter_entry(|entry| match entry.path().strip_prefix(root) {
+                Ok(rel) => rel.as_os_str().is_empty() || !is_ignored(&to_slash(rel), &patterns),
+                Err(_) => false,
             });
-
-        if source_path_canon.is_dir() {
-            for entry_result in walkdir::WalkDir::new(&source_path_canon) {
-                let entry: walkdir::DirEntry = match entry_result {
-                    Ok(e) => e,
-                    Err(e) => {
-                        eprintln!(
-                            "{}",
-                            format!(
-                                "Warning: Error walking directory {}: {} - skipped entry",
-                                source_path_canon.display(),
-                                e
-                            )
-                            .yellow()
-                        );
-                        continue;
-                    }
-                };
-
-                let entry_path: &Path = entry.path();
-
-                // Check if this file should be ignored
-                if should_ignore_path(entry_path, root, &ignore_patterns) {
-                    continue; // Skip ignored files silently during directory traversal
-                }
-
-                if entry_path.is_file() {
-                    let rel_to_source_dir: &Path =
-                        entry_path.strip_prefix(&source_path_canon).unwrap();
-                    let manifest_path: PathBuf = storage_rel_path.join(rel_to_source_dir);
-
-                    match fs::read(entry_path) {
-                        Ok(content) => match store_content_in_objects(root, &content) {
-                            Ok(hash) => {
-                                manifest
-                                    .files
-                                    .insert(manifest_path.to_string_lossy().to_string(), hash);
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "{}",
-                                    format!(
-                                        "Warning: Failed to store {} - Error: {} - skipped",
-                                        entry_path.display(),
-                                        e
-                                    )
-                                    .yellow()
-                                );
-                            }
-                        },
-                        Err(e) => {
-                            eprintln!(
-                                "{}",
-                                format!(
-                                    "Warning: Failed to read {} - Error: {} - skipped",
-                                    entry_path.display(),
-                                    e
-                                )
-                                .yellow()
-                            );
-                        }
-                    }
-                }
-            }
-        } else if source_path_canon.is_file() {
-            match fs::read(&source_path_canon) {
-                Ok(content) => match store_content_in_objects(root, &content) {
-                    Ok(hash) => {
-                        manifest
-                            .files
-                            .insert(storage_rel_path.to_string_lossy().to_string(), hash);
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "{}",
-                            format!(
-                                "Warning: Failed to store {} - Error: {} - skipped",
-                                source_path_canon.display(),
-                                e
-                            )
-                            .yellow()
-                        );
-                    }
-                },
+        for entry_result in walker {
+            let entry = match entry_result {
+                Ok(e) => e,
                 Err(e) => {
                     eprintln!(
                         "{}",
                         format!(
-                            "Warning: Failed to read {} - Error: {} - skipped",
-                            source_path_canon.display(),
+                            "Warning: Error walking directory {}: {} - skipped entry",
+                            path.display(),
                             e
                         )
                         .yellow()
                     );
+                    continue;
                 }
+            };
+            let entry_path = entry.path();
+            if entry_path.is_file() {
+                let rel = to_slash(entry_path.strip_prefix(root).unwrap());
+                add_file(store, &mut manifest, entry_path, rel);
             }
         }
     }
-
     Ok(manifest)
+}
+
+fn add_file(store: &ObjectStore, manifest: &mut SnapshotManifest, path: &Path, rel: String) {
+    let result = fs::read(path)
+        .map_err(AppError::Io)
+        .and_then(|content| store.store(&content));
+    match result {
+        Ok(hash) => {
+            manifest.files.insert(rel, hash);
+        }
+        Err(e) => {
+            eprintln!(
+                "{}",
+                format!(
+                    "Warning: Failed to store {} - Error: {} - skipped",
+                    path.display(),
+                    e
+                )
+                .yellow()
+            );
+        }
+    }
+}
+
+/// The parent state with everything under `scope` replaced by `scanned`. This is
+/// what a partial snap records: the files outside the given paths keep their
+/// previous content instead of disappearing from the checkpoint.
+pub fn overlay(
+    parent: Option<&SnapshotManifest>,
+    scope: &[String],
+    scanned: &SnapshotManifest,
+) -> SnapshotManifest {
+    let mut files: BTreeMap<String, String> = parent
+        .map(|m| {
+            m.files
+                .iter()
+                .filter(|(path, _)| !in_scope(path, scope))
+                .map(|(p, h)| (p.clone(), h.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    files.extend(scanned.files.iter().map(|(p, h)| (p.clone(), h.clone())));
+    SnapshotManifest { files }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest(entries: &[(&str, &str)]) -> SnapshotManifest {
+        SnapshotManifest {
+            files: entries
+                .iter()
+                .map(|(p, h)| (p.to_string(), h.to_string()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn overlay_replaces_only_the_scope() {
+        let parent = manifest(&[("a", "1"), ("src/x", "2"), ("src/y", "3"), ("srcz", "4")]);
+        let scanned = manifest(&[("src/x", "5")]);
+        let result = overlay(Some(&parent), &["src".to_string()], &scanned);
+        // src/y was deleted on disk, srcz is outside the scope.
+        assert_eq!(
+            result,
+            manifest(&[("a", "1"), ("src/x", "5"), ("srcz", "4")])
+        );
+    }
+
+    #[test]
+    fn manifest_ids_are_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = manifest(&[("a", "1")]);
+        let second = manifest(&[("b", "2")]);
+        assert!(write_new_manifest(dir.path(), "AAAA", &first).unwrap());
+        assert!(!write_new_manifest(dir.path(), "AAAA", &second).unwrap());
+        assert_eq!(load_snapshot_manifest(dir.path(), "AAAA").unwrap(), first);
+    }
 }

@@ -22,8 +22,37 @@ pub enum AppError {
     NotEnoughCheckpointsForDiff,
     #[error("Interactive prompt error: {0}")]
     Dialoguer(#[from] dialoguer::Error),
+    /// Bad or missing arguments; exits with code 2 like clap's own usage errors.
+    #[error("{0}")]
+    Usage(String),
     #[error("{0}")]
     Generic(String),
+}
+
+impl AppError {
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            AppError::Usage(_) => 2,
+            _ => 1,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            AppError::NotInRepo => "not_in_repo",
+            AppError::RepoExists => "repo_exists",
+            AppError::Db(_) => "db",
+            AppError::Io(_) => "io",
+            AppError::ObjectNotFound(_) => "object_not_found",
+            AppError::CheckpointNotFound(_) => "checkpoint_not_found",
+            AppError::TrackExists(_) => "track_exists",
+            AppError::TrackNotFound(_) => "track_not_found",
+            AppError::NotEnoughCheckpointsForDiff => "not_enough_checkpoints",
+            AppError::Dialoguer(_) => "prompt",
+            AppError::Usage(_) => "usage",
+            AppError::Generic(_) => "error",
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;

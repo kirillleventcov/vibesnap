@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::vibe::paths::is_reserved;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -34,34 +35,21 @@ pub fn read_ignore_patterns(root: &Path) -> Result<Vec<String>> {
     Ok(patterns)
 }
 
-/// Check if a path should be ignored based on .vibeignore patterns
-pub fn should_ignore_path(path: &Path, root: &Path, patterns: &[String]) -> bool {
-    let relative_path: &Path = match path.strip_prefix(root) {
-        Ok(rel) => rel,
-        Err(_) => return false, // If not under root, don't ignore
-    };
-
-    let path_str: std::borrow::Cow<'_, str> = relative_path.to_string_lossy();
-
-    // Always ignore .git directory
-    if path_str == ".git" || path_str.starts_with(".git/") {
+/// Check if a repo-relative path (with `/` separators) should be skipped.
+/// `.vibe` and `.git` are always skipped, whatever the ignore files say.
+pub fn is_ignored(relative: &str, patterns: &[String]) -> bool {
+    if is_reserved(relative) {
         return true;
     }
-
-    for pattern in patterns {
-        if matches_pattern(&path_str, pattern) {
-            return true;
-        }
-    }
-
-    false
+    patterns
+        .iter()
+        .any(|pattern| matches_pattern(relative, pattern))
 }
 
 /// Simple pattern matching function supporting wildcards and directory patterns
 fn matches_pattern(path: &str, pattern: &str) -> bool {
-    if pattern.ends_with('/') {
+    if let Some(dir_pattern) = pattern.strip_suffix('/') {
         // Directory pattern - matches the directory and everything under it
-        let dir_pattern: &str = &pattern[..pattern.len() - 1];
         return path == dir_pattern || path.starts_with(&format!("{}/", dir_pattern));
     }
 
@@ -101,4 +89,27 @@ fn matches_wildcard(text: &str, pattern: &str) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reserved_dirs_are_always_ignored() {
+        assert!(is_ignored(".vibe", &[]));
+        assert!(is_ignored(".vibe/meta.db", &[]));
+        assert!(is_ignored(".git/HEAD", &[]));
+        assert!(!is_ignored(".vibeignore", &[]));
+        assert!(!is_ignored(".github/workflows/ci.yml", &[]));
+    }
+
+    #[test]
+    fn patterns_still_apply() {
+        let patterns = vec!["node_modules/".to_string(), "*.log".to_string()];
+        assert!(is_ignored("node_modules", &patterns));
+        assert!(is_ignored("node_modules/a/b.js", &patterns));
+        assert!(is_ignored("debug.log", &patterns));
+        assert!(!is_ignored("src/main.rs", &patterns));
+    }
 }
