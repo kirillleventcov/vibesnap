@@ -27,3 +27,20 @@ jobs:
         run: cargo build --verbose
       - name: Run tests
         run: cargo test --verbose
+
+  # Times the roadmap's budgets on a 20,000-file tree. Shared runners are
+  # noisy, so this reports instead of failing; compare results.json across runs.
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release
+        run: cargo build --release
+      - name: Benchmark
+        run: |
+          python3 bench/bench.py target/release/vs "$RUNNER_TEMP/vibesnap-bench" | tee bench.txt
+          { echo '```'; cat bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: ${{ runner.temp }}/vibesnap-bench/results.json

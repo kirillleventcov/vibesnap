@@ -282,3 +282,66 @@ fn install_writes_hooks_and_skill_idempotently() {
     assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 1);
     assert!(!p.exists(".claude/skills/vibesnap"));
 }
+
+/// Replays the hook payloads of a real Claude Code session (recorded with
+/// Claude Code's own hooks), doing each tool's file change before its
+/// PostToolUse, the way Claude Code does.
+#[test]
+fn replays_a_recorded_claude_code_session() {
+    let p = Project::git();
+    let root = p.root().to_string_lossy().to_string();
+    let fixture = include_str!("fixtures/claude-code-session.jsonl");
+    let mut stop_output = String::new();
+    for line in fixture.lines() {
+        let payload: Value = serde_json::from_str(&line.replace("{ROOT}", &root)).unwrap();
+        if payload["hook_event_name"] == "PostToolUse" {
+            let input = &payload["tool_input"];
+            match payload["tool_name"].as_str().unwrap() {
+                "Write" => {
+                    let path = input["file_path"].as_str().unwrap();
+                    std::fs::write(path, input["content"].as_str().unwrap()).unwrap();
+                }
+                "Bash" => {
+                    // The recorded command is `echo bye >> <ROOT>/hello.txt`.
+                    let command = input["command"].as_str().unwrap();
+                    let (text, path) = command
+                        .trim_start_matches("echo ")
+                        .split_once(" >> ")
+                        .unwrap();
+                    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+                    use std::io::Write;
+                    writeln!(file, "{text}").unwrap();
+                }
+                _ => {}
+            }
+        }
+        let out = p.hook(payload.clone());
+        if payload["hook_event_name"] == "Stop" {
+            stop_output = out;
+        }
+    }
+    let log = p.log(&[]);
+    let who: Vec<(&str, &str)> = log
+        .iter()
+        .map(|e| (e["cause"].as_str().unwrap(), e["who"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        who,
+        vec![
+            ("write", "general-purpose"),
+            ("bash", "main"),
+            ("write", "main"),
+            ("baseline", "user")
+        ]
+    );
+    assert!(log[..3].iter().all(|e| e["turn"] == 1));
+    let recap = p.ok(".", &["recap"]);
+    assert!(recap.contains("general-purpose: I created"), "{recap}");
+    let stop: Value = serde_json::from_str(&stop_output).unwrap();
+    assert!(
+        stop["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("changed 2 files")
+    );
+}
