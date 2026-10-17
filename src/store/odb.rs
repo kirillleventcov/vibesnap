@@ -198,7 +198,106 @@ pub fn edit_tree(repo: &gix::Repository, base: ObjectId, edits: &[TreeEdit]) -> 
                 .map_err(git_err)?;
         }
     }
-    Ok(editor.write().map_err(git_err)?.detach())
+    let tree = editor.write().map_err(git_err)?.detach();
+    let paths: Vec<&str> = edits
+        .iter()
+        .map(|e| match e {
+            TreeEdit::Upsert(p, _) | TreeEdit::Remove(p) => p.as_str(),
+        })
+        .collect();
+    keep_trees_local(repo, tree, &paths)?;
+    Ok(tree)
+}
+
+/// Makes sure the trees on the edited paths are stored in `.vibe` itself.
+/// Writing skips objects the store can already see, and an identical tree in
+/// `.git` would otherwise be borrowed; if git later pruned it, the ledger tip
+/// would become unreadable and no event could be recorded.
+fn keep_trees_local(repo: &gix::Repository, tree: ObjectId, paths: &[&str]) -> Result<()> {
+    if !repo.git_dir().join("objects/info/alternates").exists() {
+        return Ok(());
+    }
+    let own = gix::odb::loose::Store::at(repo.git_dir().join("objects"), gix::hash::Kind::Sha1);
+    let mut dirs: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    dirs.insert("");
+    for path in paths {
+        let mut end = 0;
+        while let Some(i) = path[end..].find('/') {
+            end += i;
+            dirs.insert(&path[..end]);
+            end += 1;
+        }
+    }
+    let mut borrowed = Vec::new();
+    find_borrowed_trees(repo, &own, tree, "", &dirs, &mut borrowed)?;
+    // Many trees (a first snapshot) go into one pack; git does that far faster
+    // than writing each as a loose object. A few are written loose.
+    if borrowed.len() > 64 && pack_objects(repo.git_dir(), &borrowed) {
+        return Ok(());
+    }
+    use gix::objs::Write;
+    for id in borrowed {
+        let object = repo.find_object(id).map_err(git_err)?;
+        own.write_buf(object.kind, &object.data).map_err(git_err)?;
+    }
+    Ok(())
+}
+
+/// Collects `tree` and its subtrees on edited paths that are not stored in
+/// `.vibe` itself. Subtrees off the edited paths are unchanged from the
+/// previous tip, which was checked when it was written.
+fn find_borrowed_trees(
+    repo: &gix::Repository,
+    own: &gix::odb::loose::Store,
+    tree: ObjectId,
+    prefix: &str,
+    dirs: &std::collections::HashSet<&str>,
+    out: &mut Vec<ObjectId>,
+) -> Result<()> {
+    if tree == empty_tree() {
+        return Ok(());
+    }
+    if !own.contains(&tree) {
+        out.push(tree);
+    }
+    for (name, mode, oid) in tree_entries(repo, tree)? {
+        if !is_tree_mode(mode) {
+            continue;
+        }
+        let path = if prefix.is_empty() {
+            name
+        } else {
+            format!("{prefix}/{name}")
+        };
+        if dirs.contains(path.as_str()) {
+            find_borrowed_trees(repo, own, oid, &path, dirs, out)?;
+        }
+    }
+    Ok(())
+}
+
+/// Packs `ids` into the store with `git pack-objects`, reading them through
+/// alternates. False if git is unavailable or fails.
+fn pack_objects(git_dir: &std::path::Path, ids: &[ObjectId]) -> bool {
+    use std::io::Write as _;
+    let child = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(git_dir)
+        .args(["pack-objects", "-q"])
+        .arg(git_dir.join("objects/pack/pack"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else {
+        return false;
+    };
+    let list: String = ids.iter().map(|id| format!("{id}\n")).collect();
+    let written = child
+        .stdin
+        .take()
+        .is_some_and(|mut stdin| stdin.write_all(list.as_bytes()).is_ok());
+    child.wait().is_ok_and(|status| status.success()) && written
 }
 
 fn tree_entries(repo: &gix::Repository, tree: ObjectId) -> Result<Vec<(String, u32, ObjectId)>> {

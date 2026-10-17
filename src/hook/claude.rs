@@ -51,6 +51,15 @@ pub fn handle(input: &str) -> Result<Option<String>> {
     };
     let mut store = Store::open(&root)?;
     let result = (|| -> Result<Option<String>> {
+        if str_of(&payload, "hook_event_name") == Some("Stop") {
+            // Apply queued edits first so they land inside the turn being closed;
+            // if the store stays busy, close the turn anyway.
+            let lock = lock::try_lock_for(&store.vibe, LOCK_WAIT)?;
+            if let Some(lock) = &lock {
+                drain_inbox(&mut store, lock)?;
+            }
+            return apply(&mut store, lock.as_ref(), &payload, false);
+        }
         if needs_lock(&payload) {
             match lock::try_lock_for(&store.vibe, LOCK_WAIT)? {
                 Some(lock) => {
@@ -237,7 +246,10 @@ pub fn apply(
                 "UPDATE spans SET end_seq = ?1, end_ns = ?2 WHERE kind = 'turn' AND end_seq IS NULL AND (?3 IS NULL OR session_id = ?3)",
                 params![last, now_ns(), session],
             )?;
-            store.db.execute("DELETE FROM intents", [])?;
+            // This session's tool calls are over; other sessions' may not be.
+            store
+                .db
+                .execute("DELETE FROM intents WHERE session_id IS ?1", [&session])?;
             reconcile(store, lock, &EventMeta::cause("external", "external"))?;
             open_session(store, session.as_deref())?;
             let last = index::last_seq(&store.db)?;
@@ -258,7 +270,13 @@ pub fn apply(
         }
         "PreToolUse" => {
             let tool = tool_name(payload);
-            if tool == "Bash" {
+            if tool == "Bash" && queued {
+                // Applied late, this scan would record the command's own
+                // changes as external. Skip it and flag the command instead.
+                if let Some(id) = str_of(payload, "tool_use_id") {
+                    index::set_meta(&store.db, &format!("unseparated:{id}"), "1")?;
+                }
+            } else if tool == "Bash" {
                 reconcile(
                     store,
                     require(lock)?,
@@ -268,7 +286,13 @@ pub fn apply(
                 && let (Some(rel), Some(id)) =
                     (tool_path(store, payload), str_of(payload, "tool_use_id"))
             {
-                open_intent(store, &rel, id, str_of(payload, "agent_id"))?;
+                open_intent(
+                    store,
+                    &rel,
+                    id,
+                    str_of(payload, "agent_id"),
+                    session.as_deref(),
+                )?;
             }
             Ok(None)
         }
@@ -280,7 +304,7 @@ pub fn apply(
                     record_edit(store, lock, payload, &rel, queued)?;
                 }
             } else if tool == "Bash" {
-                record_bash(store, require(lock)?, payload)?;
+                record_bash(store, require(lock)?, payload, queued)?;
             }
             Ok(None)
         }
@@ -336,7 +360,9 @@ pub fn apply(
                     params![last, now_ns(), id],
                 )?;
             }
-            store.db.execute("DELETE FROM intents", [])?;
+            store
+                .db
+                .execute("DELETE FROM intents WHERE session_id IS ?1", [&session])?;
             if queued {
                 return Ok(None);
             }
@@ -372,7 +398,13 @@ fn open_session(store: &Store, session: Option<&str>) -> Result<()> {
 
 /// Notes the file's content before an edit tool runs, so that a change made to
 /// it in the meantime by someone else is not blamed on the agent.
-fn open_intent(store: &Store, rel: &str, tool_use_id: &str, agent_id: Option<&str>) -> Result<()> {
+fn open_intent(
+    store: &Store,
+    rel: &str,
+    tool_use_id: &str,
+    agent_id: Option<&str>,
+    session: Option<&str>,
+) -> Result<()> {
     let abs = store.root.join(rel);
     let pre = match std::fs::symlink_metadata(&abs) {
         Ok(meta) if meta.is_file() || meta.file_type().is_symlink() => {
@@ -396,8 +428,17 @@ fn open_intent(store: &Store, rel: &str, tool_use_id: &str, agent_id: Option<&st
         _ => None,
     };
     store.db.execute(
-        "INSERT OR REPLACE INTO intents (tool_use_id, path, opened_ns, pre_oid, pre_mode, agent_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![tool_use_id, rel, now_ns(), pre.map(|e| e.oid.to_string()), pre.map(|e| e.mode), agent_id],
+        "INSERT OR REPLACE INTO intents (tool_use_id, path, opened_ns, pre_oid, pre_mode, agent_id, session_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            tool_use_id,
+            rel,
+            now_ns(),
+            pre.map(|e| e.oid.to_string()),
+            pre.map(|e| e.mode),
+            agent_id,
+            session
+        ],
     )?;
     Ok(())
 }
@@ -470,8 +511,21 @@ fn record_edit(
     Ok(())
 }
 
-fn record_bash(store: &mut Store, lock: &WriteLock, payload: &Value) -> Result<()> {
+fn record_bash(store: &mut Store, lock: &WriteLock, payload: &Value, queued: bool) -> Result<()> {
     let mut meta = meta_for(store, payload, "bash", "agent")?;
+    let unseparated = match str_of(payload, "tool_use_id") {
+        Some(id) => {
+            store.db.execute(
+                "DELETE FROM meta WHERE key = ?1",
+                [format!("unseparated:{id}")],
+            )? > 0
+        }
+        None => false,
+    };
+    if queued || unseparated {
+        meta.ambiguous =
+            Some("recorded late while the store was busy; may include other changes".into());
+    }
     let diff = payload
         .get("tool_response")
         .and_then(|r| r.get("bashEditDiff"));
@@ -496,7 +550,9 @@ fn record_bash(store: &mut Store, lock: &WriteLock, payload: &Value) -> Result<(
                 .collect(),
         )
     });
-    if diff.and_then(|d| d.get("shared")).and_then(Value::as_bool) == Some(true) {
+    if meta.ambiguous.is_none()
+        && diff.and_then(|d| d.get("shared")).and_then(Value::as_bool) == Some(true)
+    {
         meta.ambiguous = Some("concurrent shell commands".into());
     }
     match listed {

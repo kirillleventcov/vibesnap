@@ -13,15 +13,20 @@ pub fn resolve_user_path(root: &Path, user_path: &Path) -> Result<String> {
 }
 
 pub fn resolve_from(root: &Path, cwd: &Path, user_path: &Path) -> Result<String> {
-    let absolute = normalize(&cwd.join(user_path));
-    // Resolve symlinks in the parent only: a symlinked file keeps its own name,
-    // but a symlinked ancestor (/tmp -> /private/tmp) must not look external.
-    let absolute = match (absolute.parent(), absolute.file_name()) {
-        (Some(parent), Some(name)) => match parent.canonicalize() {
-            Ok(parent) => parent.join(name),
-            Err(_) => absolute,
-        },
-        _ => absolute,
+    let lexical = normalize(&cwd.join(user_path));
+    // Inside the root, take the path as written: resolving a symlinked
+    // directory there would silently act on its target instead. Only a path
+    // that reaches the root through a symlink (/tmp -> /private/tmp) is resolved.
+    let absolute = if lexical.starts_with(root) {
+        lexical
+    } else {
+        match (lexical.parent(), lexical.file_name()) {
+            (Some(parent), Some(name)) => match parent.canonicalize() {
+                Ok(parent) => parent.join(name),
+                Err(_) => lexical,
+            },
+            _ => lexical,
+        }
     };
     let relative = absolute.strip_prefix(root).map_err(|_| {
         AppError::Usage(format!(

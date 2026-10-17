@@ -243,7 +243,7 @@ fn gc_prunes_history_but_keeps_labels() {
     let out = p.json(".", &["gc", "--keep", "0m"]);
     assert_eq!(out["pruned_events"], 3);
     assert_eq!(p.log(&[]).len(), 1);
-    assert_eq!(p.ledger_length(), 1);
+    assert_eq!(p.ledger_length(), 2, "the kept event and a boundary commit");
     p.ok(".", &["doctor"]);
     p.ok(".", &["restore", "start"]);
     assert!(!p.exists("a.txt"));

@@ -10,8 +10,10 @@ use crate::store::lock::{self, WriteLock};
 use crate::store::odb::{self, Entry, LABELS_PREFIX, MODE_LINK};
 use crate::store::{STORE_DIR, Store};
 use crate::text::is_binary;
-use crate::wc::apply::{Applied, apply, write_entry};
-use crate::wc::scan::{self, load_cache, new_oracle, open_intent_paths, read_paths, reconcile};
+use crate::wc::apply::{Applied, apply, blocked, write_entry};
+use crate::wc::scan::{
+    self, load_cache, new_oracle, open_intent_paths, read_paths, reconcile, reconcile_before_write,
+};
 use colored::Colorize;
 use serde_json::json;
 use std::collections::{BTreeMap, HashSet};
@@ -197,7 +199,7 @@ pub fn restore(out: &Out, spec: &str, dry_run: bool, paths: &[PathBuf]) -> Resul
         }
         Target::State(s) => s,
     };
-    reconcile(&mut store, &lock, &EventMeta::cause("external", "external"))?;
+    let protected = reconcile_before_write(&mut store, &lock)?;
     let before_seq = index::last_seq(&store.db)?;
     let current = recorded_map(&store)?;
     let target_map = odb::flatten_scoped(store.repo()?, target.tree, &scope)?;
@@ -217,7 +219,15 @@ pub fn restore(out: &Out, spec: &str, dry_run: bool, paths: &[PathBuf]) -> Resul
         plan(&current, &target_map, &scope, delete)
     } else {
         let mut oracle = new_oracle(&store);
-        apply(&store, &mut oracle, &current, &target_map, &scope, delete)?
+        apply(
+            &store,
+            &mut oracle,
+            &protected,
+            &current,
+            &target_map,
+            &scope,
+            delete,
+        )?
     };
     let mut seq = None;
     if !dry_run {
@@ -340,7 +350,7 @@ pub fn undo(
             }
         )));
     }
-    reconcile(&mut store, &lock, &EventMeta::cause("external", "external"))?;
+    let protected = reconcile_before_write(&mut store, &lock)?;
     let selected_seqs: HashSet<i64> = events.iter().map(|e| e.seq).collect();
     let last = index::last_seq(&store.db)?;
     let repo = store.repo()?;
@@ -408,6 +418,20 @@ pub fn undo(
         .into_iter()
         .filter(|(p, e)| current.get(p).copied() != *e)
         .collect();
+    // Decide for every path before writing any: an undo is all or nothing.
+    let mut oracle = new_oracle(&store);
+    let refused: Vec<String> = changed
+        .iter()
+        .filter_map(|(p, _)| {
+            blocked(&store.root, &mut oracle, &protected, p).map(|why| format!("  {p}: {why}"))
+        })
+        .collect();
+    if !refused.is_empty() {
+        return Err(AppError::Conflict(format!(
+            "Refusing to undo {spec}: these files cannot be changed safely.\n{}",
+            refused.join("\n")
+        )));
+    }
     let mut seq = None;
     if !dry_run {
         for (path, entry) in &changed {
@@ -499,14 +523,10 @@ fn merge_inverse(
     if is_binary(&c) || is_binary(&a) || is_binary(&b) {
         return Err("binary file changed since".into());
     }
-    let (c, a, b) = (
-        String::from_utf8_lossy(&c),
-        String::from_utf8_lossy(&a),
-        String::from_utf8_lossy(&b),
-    );
-    match diffy::merge(&a, &c, &b) {
+    // Merge bytes, not decoded text, so files in other encodings survive.
+    match diffy::merge_bytes(&a, &c, &b) {
         Ok(merged) => {
-            let oid = odb::write_blob(repo, merged.as_bytes()).map_err(|e| e.to_string())?;
+            let oid = odb::write_blob(repo, &merged).map_err(|e| e.to_string())?;
             Ok(Some(Entry {
                 oid,
                 mode: cur.mode,
@@ -544,7 +564,7 @@ pub fn label(
     let (mut store, lock) = begin_write()?;
     let state = match spec.as_deref().unwrap_or("@") {
         "@" => {
-            reconcile(&mut store, &lock, &EventMeta::cause("external", "external"))?;
+            reconcile_before_write(&mut store, &lock)?;
             let at = index::last_seq(&store.db)?;
             refs::state_at(&store, at, format!("e:{at}"))?
         }

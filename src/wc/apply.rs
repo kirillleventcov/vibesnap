@@ -9,7 +9,7 @@ use crate::paths::{in_scope, is_safe_path};
 use crate::store::Store;
 use crate::store::odb::{self, Entry, MODE_EXEC, MODE_LINK};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
@@ -30,12 +30,57 @@ pub struct Skipped {
     pub reason: String,
 }
 
+/// Decides whether a path may be written or deleted, before anything changes:
+/// deciding as you go would let deleting a `.gitignore` early unprotect the
+/// files it ignores.
+pub fn blocked(
+    root: &Path,
+    oracle: &mut Oracle,
+    protected: &HashSet<String>,
+    path: &str,
+) -> Option<String> {
+    if !is_safe_path(path) {
+        return Some("unsafe path".into());
+    }
+    if protected.contains(path) {
+        return Some(
+            "could not be read when the current state was recorded; left untouched".into(),
+        );
+    }
+    if parent_is_symlink(root, path) {
+        return Some("a parent directory is a symlink; left untouched".into());
+    }
+    if fs::symlink_metadata(root.join(path)).is_ok() && oracle.is_excluded(path) {
+        return Some("ignored, a secret or too large; left untouched".into());
+    }
+    None
+}
+
+/// True if any directory between the root and `path` is a symlink. Recorded
+/// paths never go through one (the walker does not follow them), so writing
+/// through one could only land somewhere unrecorded, possibly inside `.git`.
+fn parent_is_symlink(root: &Path, path: &str) -> bool {
+    let mut dir = root.to_path_buf();
+    let parts: Vec<&str> = path.split('/').collect();
+    for part in &parts[..parts.len().saturating_sub(1)] {
+        dir.push(part);
+        match fs::symlink_metadata(&dir) {
+            Ok(meta) if meta.file_type().is_symlink() => return true,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
 /// Brings the files under `scope` from `current` to `target`. `current` must be
-/// the recorded state of the working tree right now (the caller reconciles
-/// first). Deletes only when `delete` is set.
+/// the recorded state of the working tree right now (the caller records it
+/// first); `protected` are files that could not be read then. Deletes only when
+/// `delete` is set.
 pub fn apply(
     store: &Store,
     oracle: &mut Oracle,
+    protected: &HashSet<String>,
     current: &BTreeMap<String, Entry>,
     target: &BTreeMap<String, Entry>,
     scope: &[String],
@@ -44,50 +89,63 @@ pub fn apply(
     let mut out = Applied::default();
     let root = &store.root;
 
-    if delete {
-        for path in current
+    let deletions: Vec<&String> = if delete {
+        current
             .keys()
             .filter(|p| in_scope(p, scope) && !target.contains_key(*p))
-        {
-            if !is_safe_path(path) {
-                continue;
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let writes: Vec<(&String, &Entry)> = target
+        .iter()
+        .filter(|(p, e)| in_scope(p, scope) && current.get(*p) != Some(*e))
+        .collect();
+    out.unchanged = target
+        .iter()
+        .filter(|(p, e)| in_scope(p, scope) && current.get(*p) == Some(*e))
+        .count();
+    let mut verdicts: HashMap<&str, Option<String>> = HashMap::new();
+    for path in deletions
+        .iter()
+        .copied()
+        .chain(writes.iter().map(|(p, _)| *p))
+    {
+        verdicts.insert(path, blocked(root, oracle, protected, path));
+    }
+
+    for path in deletions {
+        if let Some(Some(reason)) = verdicts.get(path.as_str()) {
+            out.skipped.push(Skipped {
+                path: path.clone(),
+                reason: reason.clone(),
+            });
+            continue;
+        }
+        let abs = root.join(path);
+        match fs::remove_file(&abs) {
+            Ok(()) => {
+                remove_empty_parents(root, &abs);
+                out.deleted.push(path.clone());
             }
-            let abs = root.join(path);
-            match fs::remove_file(&abs) {
-                Ok(()) => {
-                    remove_empty_parents(root, &abs);
-                    out.deleted.push(path.clone());
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => out.skipped.push(Skipped {
-                    path: path.clone(),
-                    reason: format!("could not delete: {e}"),
-                }),
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => out.skipped.push(Skipped {
+                path: path.clone(),
+                reason: format!("could not delete: {e}"),
+            }),
         }
     }
 
-    for (path, entry) in target.iter().filter(|(p, _)| in_scope(p, scope)) {
-        if current.get(path) == Some(entry) {
-            out.unchanged += 1;
-            continue;
-        }
-        if !is_safe_path(path) {
+    for (path, entry) in writes {
+        if let Some(Some(reason)) = verdicts.get(path.as_str()) {
             out.skipped.push(Skipped {
                 path: path.clone(),
-                reason: "unsafe path".into(),
+                reason: reason.clone(),
             });
             continue;
         }
         let abs = root.join(path);
         let existing = fs::symlink_metadata(&abs).ok();
-        if existing.is_some() && !current.contains_key(path) && oracle.is_excluded(path) {
-            out.skipped.push(Skipped {
-                path: path.clone(),
-                reason: "ignored, a secret or too large now; left untouched".into(),
-            });
-            continue;
-        }
         match write_entry(store, &abs, *entry, existing.as_ref()) {
             Ok(()) => out.written.push(path.clone()),
             Err(reason) => out.skipped.push(Skipped {
@@ -130,7 +188,7 @@ pub fn write_entry(
         .map_err(|e| format!("could not write: {e}"))
 }
 
-/// Refuses to write through a symlinked directory that leads outside the root.
+/// Refuses to write through a symlinked directory, or into `.git` or `.vibe`.
 fn ensure_parent_inside(root: &Path, parent: &Path) -> std::result::Result<(), String> {
     let mut existing = parent;
     while !existing.exists() {
@@ -139,9 +197,18 @@ fn ensure_parent_inside(root: &Path, parent: &Path) -> std::result::Result<(), S
     let canonical = existing
         .canonicalize()
         .map_err(|e| format!("could not resolve parent: {e}"))?;
-    if canonical.starts_with(root) {
-        Ok(())
-    } else {
-        Err("parent directory leads outside the project".into())
+    match canonical.strip_prefix(root) {
+        Ok(rel) if !crate::paths::is_reserved(&crate::paths::to_slash(rel)) => {}
+        Ok(_) => return Err("parent directory is inside .git or .vibe".into()),
+        Err(_) => return Err("parent directory leads outside the project".into()),
     }
+    let rel = parent
+        .strip_prefix(root)
+        .map_err(|_| "outside the project")?;
+    if !rel.as_os_str().is_empty()
+        && parent_is_symlink(root, &format!("{}/x", crate::paths::to_slash(rel)))
+    {
+        return Err("a parent directory is a symlink".into());
+    }
+    Ok(())
 }

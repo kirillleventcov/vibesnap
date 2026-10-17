@@ -259,6 +259,8 @@ pub struct ScanResult {
     pub cache_rows: Vec<CacheRow>,
     pub files: usize,
     pub hashed: usize,
+    /// Files that could not be read; their recorded state may be stale.
+    pub unreadable: Vec<String>,
 }
 
 /// Compares the working tree with the stat cache. Paths in `skip` are left out
@@ -302,7 +304,7 @@ pub fn scan(store: &Store, skip: &HashSet<String>, write: bool) -> Result<ScanRe
 
     // Files git already hashed (same stat as in .git/index) need not be read.
     let mut known: HashMap<String, Entry> = HashMap::new();
-    if to_hash.len() > 64 {
+    if to_hash.len() > 64 && seeding_is_exact(store, &files) {
         let seeds = git_index_seeds(store);
         for (rel, _, stat, mode) in &to_hash {
             if let Some((seed_stat, oid, seed_mode)) = seeds.get(*rel)
@@ -344,9 +346,11 @@ pub fn scan(store: &Store, skip: &HashSet<String>, write: bool) -> Result<ScanRe
     known.extend(hashed);
 
     let mut changes = Vec::new();
+    let mut unreadable = Vec::new();
     for (rel, _, stat, _) in &to_hash {
         let Some(entry) = known.get(*rel) else {
-            continue; // unreadable: left as it was
+            unreadable.push(rel.to_string());
+            continue;
         };
         let before = cache.get(*rel).map(|c| c.entry);
         if before != Some(*entry) {
@@ -387,6 +391,51 @@ pub fn scan(store: &Store, skip: &HashSet<String>, write: bool) -> Result<ScanRe
         cache_rows,
         files: files.len(),
         hashed: hashed_count,
+        unreadable,
+    })
+}
+
+/// True if git's blob IDs equal the bytes on disk. Line-ending conversion,
+/// clean filters (git-lfs) and other attributes make git store something else,
+/// so the index cannot be trusted then and every file is hashed. Errs on the
+/// side of hashing: that is only slower.
+fn seeding_is_exact(store: &Store, files: &[(String, Metadata)]) -> bool {
+    let Some(git) = store.git() else {
+        return false;
+    };
+    if files
+        .iter()
+        .any(|(rel, _)| rel == ".gitattributes" || rel.ends_with("/.gitattributes"))
+        || git.common_dir.join("info").join("attributes").exists()
+    {
+        return false;
+    }
+    let mut configs = vec![
+        git.common_dir.join("config"),
+        PathBuf::from("/etc/gitconfig"),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        configs.push(home.join(".gitconfig"));
+        configs.push(home.join(".config").join("git").join("config"));
+    }
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        configs.push(PathBuf::from(xdg).join("git").join("config"));
+    }
+    !configs.iter().any(|path| {
+        let text = fs::read_to_string(path).unwrap_or_default().to_lowercase();
+        // Filter drivers (git-lfs adds one globally) only apply through
+        // attributes, checked above. Includes could set anything: be careful.
+        text.contains("[include")
+            || text.lines().any(|line| {
+                let line: String = line
+                    .split(['#', ';'])
+                    .next()
+                    .unwrap_or("")
+                    .replace([' ', '\t'], "");
+                (line.starts_with("autocrlf=") && !line.ends_with("=false"))
+                    || line.starts_with("eol=")
+                    || line.starts_with("attributesfile=")
+            })
     })
 }
 
@@ -496,6 +545,18 @@ pub fn reconcile(store: &mut Store, lock: &WriteLock, meta: &EventMeta) -> Resul
     let skip = open_intent_paths(store)?;
     let result = scan(store, &skip, true)?;
     ledger::record(store, lock, meta, &result.changes, &result.cache_rows)
+}
+
+/// Records everything, including files with an edit in flight, before a
+/// command overwrites the working tree. Pending intents are dropped: what they
+/// guarded is now recorded, and their PostToolUse simply records the result.
+/// Returns the files that could not be read, which must not be overwritten.
+pub fn reconcile_before_write(store: &mut Store, lock: &WriteLock) -> Result<HashSet<String>> {
+    let result = scan(store, &HashSet::new(), true)?;
+    let meta = EventMeta::cause("external", "external");
+    ledger::record(store, lock, &meta, &result.changes, &result.cache_rows)?;
+    store.db.execute("DELETE FROM intents", [])?;
+    Ok(result.unreadable.into_iter().collect())
 }
 
 /// Paths an edit tool is about to change. Intents older than ten minutes are

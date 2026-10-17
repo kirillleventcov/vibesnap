@@ -65,12 +65,10 @@ pub fn is_label_name(name: &str) -> bool {
 /// The state right after event `seq` (seq 0: before anything was recorded).
 pub fn state_at(store: &Store, seq: i64, name: String) -> Result<State> {
     if seq <= 0 {
-        return Ok(State {
-            tree: odb::empty_tree(),
-            seq: Some(0),
-            partial: false,
-            name,
-        });
+        // An empty tree here would make restore delete everything.
+        return Err(AppError::Usage(format!(
+            "'{name}' is before the first recorded event"
+        )));
     }
     let event = index::event(&store.db, seq)?.ok_or_else(|| {
         AppError::Usage(format!(
@@ -145,7 +143,8 @@ pub fn resolve_state(store: &Store, spec: &str) -> Result<State> {
             })
             .optional()?
             .flatten();
-        return state_at(store, seq.unwrap_or(0), name);
+        let seq = seq.ok_or_else(|| usage(spec, "that is before the first recorded event"))?;
+        return state_at(store, seq, name);
     }
     if let Some(rev) = spec.strip_prefix("git:") {
         return resolve_git(store, rev, name);
@@ -179,6 +178,9 @@ fn nth_event_back(store: &Store, last: i64, n: i64) -> Result<i64> {
     if n == 0 {
         return Ok(last);
     }
+    if n < 0 {
+        return Err(usage(&format!("@-{n}"), "expected a positive count"));
+    }
     let seq: Option<i64> = store
         .db
         .query_row(
@@ -187,7 +189,12 @@ fn nth_event_back(store: &Store, last: i64, n: i64) -> Result<i64> {
             |r| r.get(0),
         )
         .optional()?;
-    Ok(seq.unwrap_or(0))
+    seq.ok_or_else(|| {
+        usage(
+            &format!("@-{n}"),
+            "that is further back than the recorded history",
+        )
+    })
 }
 
 pub fn resolve_turn(store: &Store, spec: &str) -> Result<Span> {
@@ -357,7 +364,17 @@ pub fn resolve_events(store: &Store, spec: &str) -> Result<Vec<Event>> {
     }
     if spec == "turn" || spec.starts_with("turn-") || spec.starts_with("turn:") {
         let span = resolve_turn(store, spec)?;
-        return index::events_between(conn, span.start_seq, span.end_seq.unwrap_or(last));
+        // Also take events tagged with the turn that landed after it closed (a
+        // hook queued while the store was busy).
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM events WHERE (seq > ?1 AND seq <= ?2) OR (?3 IS NOT NULL AND turn = ?3) ORDER BY seq",
+            index::EVENT_COLUMNS
+        ))?;
+        let rows = stmt.query_map(
+            rusqlite::params![span.start_seq, span.end_seq.unwrap_or(last), span.number],
+            index::event_from_row,
+        )?;
+        return Ok(rows.collect::<rusqlite::Result<_>>()?);
     }
     let from = resolve_seq(store, spec)?;
     index::events_between(conn, from, last)

@@ -8,7 +8,8 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
-const SCHEMA_VERSION: i32 = 1;
+/// 1: initial layout. 2: intents.session_id.
+const SCHEMA_VERSION: i32 = 2;
 
 pub fn connect(vibe: &Path) -> Result<Connection> {
     let conn = Connection::open(vibe.join("index.db"))?;
@@ -31,6 +32,9 @@ pub fn connect(vibe: &Path) -> Result<Connection> {
     if version < SCHEMA_VERSION {
         conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get::<_, String>(0))?;
         conn.execute_batch(SCHEMA)?;
+        if version == 1 {
+            conn.execute_batch("ALTER TABLE intents ADD COLUMN session_id TEXT")?;
+        }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
     Ok(conn)
@@ -108,7 +112,8 @@ CREATE TABLE IF NOT EXISTS intents (
   opened_ns INTEGER NOT NULL,
   pre_oid TEXT,
   pre_mode INTEGER,
-  agent_id TEXT
+  agent_id TEXT,
+  session_id TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 COMMIT;

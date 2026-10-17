@@ -14,6 +14,7 @@ use colored::Colorize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The files of a side, by path.
@@ -591,9 +592,19 @@ pub fn show(out: &Out, spec: &str, patch: bool, max_lines: usize) -> Result<()> 
         println!("binary file {rel} at {r}, {}", human_size(data.len()));
         return Ok(());
     }
-    let mut budget = Budget::new(max_lines);
-    budget.block(&String::from_utf8_lossy(&data));
-    budget.finish("pass --max-lines");
+    // Print the bytes as stored (keeping \r\n and other encodings), up to the budget.
+    let mut stdout = std::io::stdout().lock();
+    let mut lines = data.split_inclusive(|&b| b == b'\n');
+    for line in lines.by_ref().take(max_lines) {
+        stdout.write_all(line)?;
+    }
+    let rest = lines.count();
+    if !data.ends_with(b"\n") && !data.is_empty() {
+        writeln!(stdout)?;
+    }
+    if rest > 0 {
+        writeln!(stdout, "... {rest} more lines not shown (pass --max-lines)")?;
+    }
     Ok(())
 }
 

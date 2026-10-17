@@ -53,6 +53,13 @@ pub struct CacheRow {
     pub value: Option<(crate::wc::scan::FileStat, Entry)>,
 }
 
+/// Marks the parentless commit `vs gc` puts at the start of a pruned ledger.
+pub const BOUNDARY_TRAILER: &str = "Vibesnap-Boundary";
+
+fn is_boundary(info: &odb::CommitInfo) -> bool {
+    odb::parse_trailers(&info.message).contains_key(BOUNDARY_TRAILER)
+}
+
 /// The ledger's tip commit and its tree.
 pub fn tip(store: &Store) -> Result<Option<(ObjectId, ObjectId)>> {
     let repo = store.repo()?;
@@ -299,7 +306,11 @@ pub fn catch_up(store: &mut Store, _lock: &WriteLock) -> Result<()> {
         }
         let info = odb::read_commit(repo, commit)?;
         cursor = info.parents.first().copied();
-        missing.push((commit, info));
+        if is_boundary(&info) {
+            cursor = None;
+        } else {
+            missing.push((commit, info));
+        }
         if cursor.is_none() && indexed.is_some() {
             // The indexed tip is not an ancestor: the ledger was rewritten elsewhere.
             return reindex(store);
@@ -310,6 +321,29 @@ pub fn catch_up(store: &mut Store, _lock: &WriteLock) -> Result<()> {
         .into_iter()
         .map(|(commit, info)| event_from_commit(repo, commit, &info))
         .collect::<Result<_>>()?;
+    // The stat cache missed these events too. Point its rows for the touched
+    // paths at the ledger's content with an unknown stat, so the next scan
+    // re-reads those files and a later event cannot carry a stale "before".
+    let mut latest: std::collections::BTreeMap<String, Option<Entry>> = Default::default();
+    for (_, changes) in &rows {
+        for c in changes {
+            latest.insert(c.path.clone(), c.after);
+        }
+    }
+    let unknown = crate::wc::scan::FileStat {
+        mtime_ns: -1,
+        ctime_ns: -1,
+        size: -1,
+        ino: -1,
+        racy: true,
+    };
+    let cache: Vec<CacheRow> = latest
+        .into_iter()
+        .map(|(path, after)| CacheRow {
+            path,
+            value: after.map(|e| (unknown, e)),
+        })
+        .collect();
     let tx = store.db.transaction()?;
     for (event, changes) in rows {
         insert_event(&tx, &event)?;
@@ -317,6 +351,7 @@ pub fn catch_up(store: &mut Store, _lock: &WriteLock) -> Result<()> {
             insert_path(&tx, event.seq, c, None)?;
         }
     }
+    write_cache(&tx, &cache)?;
     tx.commit()?;
     Ok(())
 }
@@ -379,7 +414,9 @@ pub fn reindex(store: &mut Store) -> Result<()> {
     while let Some(commit) = cursor {
         let info = odb::read_commit(repo, commit)?;
         cursor = info.parents.first().copied();
-        commits.push((commit, info));
+        if !is_boundary(&info) {
+            commits.push((commit, info));
+        }
     }
     commits.reverse();
     let rows: Vec<(Event, Vec<FileChange>)> = commits

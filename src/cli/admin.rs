@@ -24,7 +24,14 @@ pub fn commit(
     exclude: &[PathBuf],
     dry_run: bool,
 ) -> Result<()> {
-    let (store, _lock) = begin_write()?;
+    let (mut store, lock) = begin_write()?;
+    // Record edits made since the last event first, so a file the user changed
+    // after the agent shows up as mixed instead of being committed silently.
+    crate::wc::scan::reconcile(
+        &mut store,
+        &lock,
+        &crate::store::ledger::EventMeta::cause("external", "external"),
+    )?;
     let mut plan = commit::plan(&store, span)?;
     let excluded: Vec<String> = exclude
         .iter()
@@ -167,10 +174,25 @@ pub fn gc(out: &Out, keep: Option<String>) -> Result<()> {
 
     let mut pruned = 0;
     if last > 0 && first_kept > oldest {
-        // Re-create the kept events as a new chain that starts at first_kept.
+        // Re-create the kept events as a new chain. It starts from a boundary
+        // commit holding the state just before first_kept, so the first kept
+        // event still diffs against what it changed (and can be undone).
         let repo = store.repo()?;
         let kept = index::events_between(&store.db, first_kept - 1, last)?;
-        let mut parent: Option<gix::ObjectId> = None;
+        let mut parent: Option<gix::ObjectId> =
+            match kept.first().and_then(|e| e.before_tree.clone()) {
+                Some(before) => Some(odb::write_commit(
+                    repo,
+                    odb::parse_oid(&before)?,
+                    &[],
+                    &format!(
+                        "history before e:{first_kept} was pruned\n\n{}: true\n",
+                        ledger::BOUNDARY_TRAILER
+                    ),
+                    kept[0].ts_ns / 1_000_000_000,
+                )?),
+                None => None,
+            };
         let mut rewritten = Vec::new();
         for e in &kept {
             let info = odb::read_commit(repo, odb::parse_oid(&e.commit_oid)?)?;
@@ -212,12 +234,19 @@ pub fn gc(out: &Out, keep: Option<String>) -> Result<()> {
     let _ = store.db.execute_batch("VACUUM;");
     ledger::checkpoint(&store.db);
 
-    let git = Command::new("git")
-        .arg("--git-dir")
-        .arg(&store.vibe)
-        .args(["gc", "--quiet", "--prune=1.hour.ago"])
-        .output();
-    let repacked = matches!(&git, Ok(o) if o.status.success());
+    // Pack everything the ledger and labels reach, including objects so far
+    // borrowed from .git (no --local), so the store no longer depends on git
+    // keeping them. Then drop unreachable objects older than an hour; newer
+    // ones may belong to a writer that ran just before the lock was taken.
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(&store.vibe)
+            .args(args)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    let repacked = git(&["repack", "-a", "-d", "-q"]) && git(&["prune", "--expire=1.hour.ago"]);
     let size_after = dir_size(&store.vibe);
     drop(lock);
     if out.json {

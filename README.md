@@ -61,7 +61,7 @@ Most of the time you do nothing. When you want to look back:
 | Re-orient after context compaction | `vs recap` |
 | Commit what the agents did this turn | `vs commit turn -m "..."` |
 
-`undo` applies the inverse of the selected events as a three-way merge, so later edits by others survive. If a later edit touched the same lines it refuses (exit code 3) and names the event. `undo` and `restore` record the current state first, so both can be undone.
+`undo` applies the inverse of the selected events as a three-way merge, so later edits by others survive. If a later edit touched the same lines it refuses (exit code 3) and names the event. Over a span (`turn`, `agent:X`, a range) it reverts agents' edits only; your own edits in the span stay unless you name them (`e:N`) or pass `--include-external`. `undo` and `restore` record the current state first, so both can be undone.
 
 ### Refs
 
@@ -121,8 +121,10 @@ Plain git can read the history: `git --git-dir=.vibe log --stat`.
 
 - **Capture.** Before an agent acts (a new prompt, a shell command), vibesnap records whatever changed since the last event as `external`. The agent's own event then holds only its own change. Edit tools are recorded from the file path in the hook payload, without walking the tree; shell commands use the changed-file list Claude Code provides when it has one, otherwise a scan. Every event carries the session, turn, subagent and tool call that caused it. Prompt text is never stored.
 - **Speed.** A stat cache (mtime, ctime, size, inode, mode, blob ID per file, with git's "racy" rule) means unchanged files are never read; a scan is a parallel stat walk that prunes ignored directories. In a git repository the first scan takes blob IDs from `.git/index`, and blobs git already has are borrowed rather than copied. A one-file event writes only the trees on that file's path.
-- **Safety.** Objects are written by temp file and rename, then the ledger ref moves by compare-and-swap, then the index commits; if a crash interrupts, the next write catches the index up from the ledger. One writer at a time (a lock on `.vibe/lock`); hooks never wait on it for more than 50 ms, they queue instead. `.vibe`, `.git`, nested repositories, `.env*`, `*.pem`, `*.key` and files over 5 MB are never recorded, and ignored files are never written or deleted.
-- **Retention.** `vs gc` keeps 7 days of history by default and everything that a label points at; labels copy any objects they borrow from `.git`, so pruning git cannot break them.
+- **Safety.** Objects are written by temp file and rename, then the ledger ref moves by compare-and-swap, then the index commits; if a crash interrupts, the next write catches the index up from the ledger. One writer at a time (a lock on `.vibe/lock`); hooks never wait on it for more than 50 ms, they queue instead. `.vibe`, `.git`, nested repositories, `.env*`, `*.pem`, `*.key` and files over 5 MB are never recorded. `restore` and `undo` record everything first (including files an agent is about to edit), decide which paths they may touch before touching any, and never write or delete ignored, secret, oversized or unreadable files, or anything behind a symlinked directory.
+- **Borrowed objects.** Trees are always stored in `.vibe`. File contents git already has are borrowed through alternates until `vs gc`, which packs everything the ledger and labels reach into the store itself; labels copy what they borrow right away. Until then, if git prunes an object vibesnap borrowed (only after it became unreachable in git, e.g. an amended commit, and git's two-week grace period, or `git gc --prune=now`), `vs doctor` reports it.
+- **Seeding.** The first scan trusts `.git/index` only when git stores files byte for byte: not with `core.autocrlf`, `.gitattributes` (filters such as git-lfs, `eol`, encodings) or config includes. Otherwise it hashes every file, which is only slower.
+- **Retention.** `vs gc` keeps 7 days of history by default and everything that a label points at. The pruned ledger starts from a boundary commit holding the state before the first kept event, so that event can still be diffed and undone.
 - **Commits.** When a turn ends with uncommitted agent changes, the Stop hook shows you a one-line offer (it costs no model turn). `vs commit turn` stages only the files agents changed in that turn; if you also edited one of them during the turn it asks for `--include-mixed`.
 
 ### Configuration
@@ -144,15 +146,14 @@ Measured with `bench/bench.py` on a 4-core Linux container: 20,000 text files (1
 
 | Operation | vibesnap 2 | vibesnap 1 | git | Roadmap budget |
 | --- | --- | --- | --- | --- |
-| First snapshot, git repo (seeded from `.git/index`) | 0.19–0.44 s | 2.95 s | 4.0–6.9 s (`add -A`) | 0.1 s |
-| First snapshot, no git | 1.5–3.6 s | 2.95 s | — | 3 s |
-| Snapshot with nothing changed | 40–58 ms | 1.56 s | 41–51 ms (`status`) | 50 ms |
-| Edit hook (PostToolUse), median / p95 | 7–8 / 9–11 ms | — | — | 5 ms |
+| First snapshot, git repo (seeded from `.git/index`) | 0.25–0.31 s (up to 1.2 s cold, right after the repo was created) | 2.95 s | 4.0–7.5 s (`add -A`) | 0.1 s |
+| First snapshot, no git | 1.4–3.6 s | 2.95 s | — | 3 s |
+| Snapshot with nothing changed | 40–66 ms | 1.56 s | 41–53 ms (`status`) | 50 ms |
+| Edit hook (PostToolUse), median / p95 | 7–10 / 9–14 ms | — | — | 5 ms |
 | Edit hook (PreToolUse), p95 | 4 ms | — | — | 2 ms |
-| Prompt hook (reconcile, nothing changed), p95 | 61–66 ms | — | — | 50 ms |
-| Restore, one file differs | 85–110 ms | 2.27 s (rewrites all) | — | proportional to the change |
-| Store size, git repo, after `vs gc` | 3.9–4.2 MB | 181 MB | 3.9 MB (`.git`) | no larger than `.git` |
-| Store size, no git, after `vs gc` | 6–11 MB | 181 MB | — | — |
+| Prompt hook (reconcile, nothing changed), p95 | 59–74 ms | — | — | 50 ms |
+| Restore, one file differs | 85–150 ms | 2.27 s (rewrites all) | — | proportional to the change |
+| Store size after `vs gc` | 6.3 MB, of which about 4 MB is the SQLite index | 181 MB | 3.9 MB (`.git`) | no larger than `.git` |
 
 Ranges are across runs on this (noisy) machine. Where a budget is missed: the no-op snapshot and the prompt hook are bound by the parallel stat walk (about 40 ms for 20,000 files here, which a file watcher would remove), and the edit hooks by process start-up, opening SQLite and writing the event's objects. Set `VIBESNAP_TRACE=1` to print where a scan or hook spends its time.
 
