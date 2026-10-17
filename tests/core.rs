@@ -317,3 +317,22 @@ fn errors_have_kinds_and_exit_codes() {
     let outside = Project::bare();
     assert_eq!(outside.run(".", &["log"]).status.code(), Some(1));
 }
+
+#[test]
+fn nested_repositories_and_claude_worktrees_are_not_recorded() {
+    let p = Project::git();
+    p.write("vendor/lib/.git/HEAD", "ref: refs/heads/main\n");
+    p.write("vendor/lib/src.rs", "nested repo\n");
+    p.write(".claude/worktrees/agent-1/.git", "gitdir: elsewhere\n");
+    p.write(".claude/worktrees/agent-1/src/main.rs", "worktree copy\n");
+    p.write(".claude/settings.json", "{}\n");
+    let p = p.init();
+    let files = paths(&p.log(&[])[0]);
+    assert_eq!(
+        files,
+        vec![".claude/settings.json", ".gitignore", "src/main.rs"]
+    );
+    p.write("vendor/lib/src.rs", "changed\n");
+    p.write(".claude/worktrees/agent-1/src/main.rs", "changed\n");
+    assert_eq!(p.json(".", &["status"])["changes"], serde_json::json!([]));
+}
