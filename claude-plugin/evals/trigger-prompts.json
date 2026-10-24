@@ -1,0 +1,28 @@
+{
+  "skill": "vibesnap",
+  "purpose": "Trigger evals for skills/vibesnap/SKILL.md: run each prompt in a project with vibesnap recording, and check whether Claude reaches for vs. Not run yet.",
+  "should_trigger": [
+    "What did we change since my last message?",
+    "Undo the last edit you made to auth.ts but keep the test changes.",
+    "What did src/server.ts look like before we started this session?",
+    "Which subagent rewrote the retry logic in client.py?",
+    "The build was passing an hour ago. What changed since then?",
+    "Revert everything the test-writer agent did.",
+    "Did I edit anything while you were working?",
+    "Summarise what you've done so far; we lost the earlier context.",
+    "Go back to how the config looked at 14:05.",
+    "Commit what you changed in this turn."
+  ],
+  "should_not_trigger": [
+    "What does this function do?",
+    "Show me the git log for the last week.",
+    "Create a new branch called feature/login and switch to it.",
+    "Rename the variable userId to accountId everywhere.",
+    "Why is this test failing?",
+    "Write a commit message for my staged changes.",
+    "Undo the last git commit but keep the changes staged.",
+    "Explain the difference between git reset and git revert.",
+    "Add a .gitignore entry for the build folder.",
+    "What changed in React 19?"
+  ]
+}

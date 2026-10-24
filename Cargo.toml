@@ -1,40 +1,50 @@
 [package]
 name = "vibesnap"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
-description = "Snapshot-style version control for AI-first coding"
+description = "An edit ledger for AI agents: records every file change, who made it and why, and lets agents query and undo it"
 readme = "README.md"
 repository = "https://github.com/kirillleventcov/vibesnap"
 license = "MIT"
-keywords = ["version-control", "snapshot", "checkpoint", "cli"]
+keywords = ["version-control", "snapshot", "agents", "cli", "undo"]
 categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "vibesnap"
+path = "src/lib.rs"
 
 [[bin]]
 name = "vibesnap"
 path = "src/main.rs"
 
+[[bin]]
+name = "vs"
+path = "src/bin/vs.rs"
+
 [dependencies]
-clap = { version = "4.4.8", features = ["derive"] }
+gix = { version = "0.89", default-features = false, features = ["sha1", "index", "revision", "max-performance-safe"] }
+ignore = "0.4.33"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
+clap = { version = "4.4.8", features = ["derive"] }
 chrono = "0.4.26"
-sha2 = "0.10.6"
-hex = "0.4.3"
-colored = "3.0.0"
-thiserror = "2.0.12"
-walkdir = "2.4.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+similar = "2.3"
+diffy = "0.4.2"
 toml = "0.9.7"
 dirs = "6.0"
-dialoguer = "0.12.0"
-similar = "2.3"
+thiserror = "2.0.12"
+colored = "3.0.0"
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.8"
 
 [profile.release]
-lto = true
+# Speed over size: hashing and diffing are the hot loops, and every agent hook
+# spawns this binary.
+opt-level = 3
+lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = true
-opt-level = "z"

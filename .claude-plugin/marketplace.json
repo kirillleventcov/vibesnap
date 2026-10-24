@@ -1,0 +1,14 @@
+{
+  "name": "vibesnap",
+  "description": "vibesnap: an edit ledger for AI agents",
+  "owner": {
+    "name": "Kirill Leventcov"
+  },
+  "plugins": [
+    {
+      "name": "vibesnap",
+      "source": "./claude-plugin",
+      "description": "Records every file change and lets Claude query, undo and commit them. Needs the vs binary (cargo install vibesnap)."
+    }
+  ]
+}

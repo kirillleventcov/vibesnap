@@ -1,0 +1,12 @@
+#!/bin/sh
+# Runs `vs hook claude` with the hook payload on stdin. Never fails the hook:
+# if vibesnap is not installed, say how to install it once and exit 0.
+if command -v vs >/dev/null 2>&1; then
+  exec vs hook claude
+fi
+if [ -x "$HOME/.cargo/bin/vs" ]; then
+  exec "$HOME/.cargo/bin/vs" hook claude
+fi
+cat >/dev/null
+echo "vibesnap: the vs binary is not on PATH; install it with: cargo install vibesnap" >&2
+exit 0
